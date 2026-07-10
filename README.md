@@ -1,29 +1,29 @@
-# OKX Flash Earn Reminder
+# OKX 闪赚提醒器
 
-Windows desktop app for monitoring the OKX Flash Earn page and sending reminders for Flash Earn campaigns.
+这是一个 Windows 桌面程序，用来监控 OKX 闪赚页面，并在活动出现、即将开始或处于进行中时发送提醒邮件。
 
-## Features
+## 功能
 
-- Windows tray application with visible UI
-- Parses live campaign countdown data from the OKX page
-- Reminder rules:
-  - first seen immediately
-  - 1 hour before start
-  - first hour after start
-  - daily at 08:00 and 14:00 while ongoing
-  - optional 24-hour-before-start reminder
-- Email alerts with simple Chinese summary content
+- Windows 桌面界面，支持最小化到托盘
+- 自动解析 OKX 页面中的活动信息和倒计时
+- 支持提醒规则：
+  - 首次发现立即提醒
+  - 开始前 1 小时提醒
+  - 开始后的第 1 小时提醒
+  - 活动进行中每天 08:00 和 14:00 提醒
+  - 可选的开始前 24 小时提醒
+- 支持发送邮件提醒，正文为简洁中文内容
 
-## Run
+## 运行
 
 ```powershell
 pip install -r requirements.txt
 python -m flash_earn_reminder.main
 ```
 
-双击 `run_windows.pyw` 或 `run_windows_silent.vbs` 可无黑窗启动。
+如果需要无黑窗口启动，可以使用 `run_windows.pyw` 或 `run_windows_silent.vbs`。
 
-## Notes
+## 说明
 
-- Local runtime config is stored under `data/` and is intentionally not committed.
-- Build outputs are generated under `dist/` by `build_windows_exe.bat`.
+- 本地运行配置保存在 `data/` 下，不会提交到仓库。
+- 打包产物由 `build_windows_exe.bat` 生成，输出到 `dist/`。
