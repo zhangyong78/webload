@@ -111,6 +111,17 @@ def test_parse_campaign_extracts_ongoing_status() -> None:
     assert campaigns[0].countdown_seconds == 8 * 3600
 
 
+def test_parse_campaign_uses_end_countdown_when_ongoing_status_is_missing() -> None:
+    html = SAMPLE_HTML.replace('<div class="flash-earn-campaign-status">进行中</div>', "")
+
+    campaigns = parse_campaigns(html)
+
+    assert len(campaigns) == 1
+    assert campaigns[0].status_text == ""
+    assert campaigns[0].countdown_label == "结束倒计时"
+    assert campaigns[0].is_ongoing is True
+
+
 def test_parse_campaign_extracts_upcoming_countdown_from_activity_starts_label() -> None:
     campaigns = parse_campaigns(UPCOMING_HTML)
 

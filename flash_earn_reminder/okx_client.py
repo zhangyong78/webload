@@ -70,7 +70,7 @@ def parse_campaigns(html: str, *, source_url: str = DEFAULT_URL) -> list[Campaig
             countdown_text,
             countdown_overrides,
         )
-        is_ongoing = _is_ongoing(status_text)
+        is_ongoing = _is_ongoing(status_text, countdown_label)
         is_upcoming = _is_upcoming(status_text, countdown_label)
         campaigns.append(
             Campaign(
@@ -202,9 +202,12 @@ def _campaign_id(*, name: str, reward_text: str, countdown_label: str) -> str:
     return digest[:16]
 
 
-def _is_ongoing(status_text: str) -> bool:
-    normalized = status_text.strip().lower()
-    return any(token in normalized for token in ("进行中", "ongoing", "running"))
+def _is_ongoing(status_text: str, countdown_label: str) -> bool:
+    normalized_status = status_text.strip().lower()
+    normalized_label = countdown_label.strip().lower()
+    if any(token in normalized_status for token in ("进行中", "ongoing", "running")):
+        return True
+    return "结束" in countdown_label or "end" in normalized_label
 
 
 def _is_upcoming(status_text: str, countdown_label: str) -> bool:
