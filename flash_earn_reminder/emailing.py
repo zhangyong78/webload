@@ -70,19 +70,30 @@ def send_email_alert(*, subject: str, body: str, config: EmailConfig) -> None:
     sender = (config.sender_email or config.smtp_username).strip()
     if not (config.enabled and config.smtp_host and sender and config.recipient_emails):
         raise ValueError("邮件配置不完整，无法发送邮件。")
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = sender
-    message["To"] = ", ".join(config.recipient_emails)
-    message.set_content(body, charset="utf-8")
     if config.use_ssl:
         with smtplib.SMTP_SSL(config.smtp_host, config.smtp_port, timeout=20) as smtp:
             _login_if_needed(smtp, config)
-            smtp.send_message(message)
+            _send_private_messages(smtp, subject, body, sender, config.recipient_emails)
         return
     with smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=20) as smtp:
         smtp.starttls()
         _login_if_needed(smtp, config)
+        _send_private_messages(smtp, subject, body, sender, config.recipient_emails)
+
+
+def _send_private_messages(
+    smtp: smtplib.SMTP,
+    subject: str,
+    body: str,
+    sender: str,
+    recipients: tuple[str, ...],
+) -> None:
+    for recipient in recipients:
+        message = EmailMessage()
+        message["Subject"] = subject
+        message["From"] = sender
+        message["To"] = recipient
+        message.set_content(body, charset="utf-8")
         smtp.send_message(message)
 
 

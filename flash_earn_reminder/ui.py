@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import threading
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -31,8 +32,9 @@ from PySide6.QtWidgets import (
 
 from flash_earn_reminder.emailing import build_alert_email, build_simulated_ongoing_email, import_qqokx_email_config, send_email_alert
 from flash_earn_reminder.instance_guard import SingleInstanceGuard
-from flash_earn_reminder.models import AlertEvent, AppConfig, AppState, Campaign
+from flash_earn_reminder.models import AlertEvent, AppConfig, AppState, Campaign, EmailConfig
 from flash_earn_reminder.monitor import run_monitor_cycle
+from flash_earn_reminder.rules import toggle_campaign_mute
 from flash_earn_reminder.storage import app_config_path, app_state_path, load_app_config, load_app_state, save_app_config, save_app_state
 
 
@@ -42,8 +44,12 @@ class WorkerSignals(QObject):
     email_failed = Signal(str)
 
 
+def merge_default_recipients(recipients: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((*EmailConfig().recipient_emails, *recipients)))
+
+
 class CampaignCard(QFrame):
-    def __init__(self, campaign: Campaign) -> None:
+    def __init__(self, campaign: Campaign, muted: bool = False, on_toggle_reminder: Callable[[], None] | None = None) -> None:
         super().__init__()
         self.setObjectName("campaignCard")
         layout = QVBoxLayout(self)
@@ -64,6 +70,10 @@ class CampaignCard(QFrame):
         else:
             status.setProperty("tone", "idle")
         title_row.addWidget(status)
+        if on_toggle_reminder is not None:
+            reminder_button = QPushButton("恢复提醒" if muted else "关闭此活动提醒")
+            reminder_button.clicked.connect(on_toggle_reminder)
+            title_row.addWidget(reminder_button)
         title_row.addStretch(1)
         layout.addLayout(title_row)
 
@@ -191,13 +201,11 @@ class MainWindow(QMainWindow):
     def _build_settings_group(self) -> QGroupBox:
         group = QGroupBox("提醒设置")
         form = QFormLayout(group)
-        self.schedule_mode_label = QLabel("每日 08:00 / 14:00 + 活动关键时点")
+        self.schedule_mode_label = QLabel("每日 08:00 / 20:00 + 新活动 14:00 + 关键时点")
         self.reminder_time_label = QLabel()
         self.remind_first_seen_checkbox = QCheckBox("首次发现立即提醒")
-        self.remind_upcoming_checkbox = QCheckBox("开始前 24 小时提醒")
-        self.remind_upcoming_one_hour_checkbox = QCheckBox("开始前 1 小时提醒")
-        self.remind_started_first_hour_checkbox = QCheckBox("开始后第 1 小时提醒")
-        self.remind_ongoing_checkbox = QCheckBox("进行中每日 08:00 / 14:00 提醒")
+        self.remind_pre_start_six_hours_checkbox = QCheckBox("开始前 6 小时内每小时提醒")
+        self.remind_ongoing_checkbox = QCheckBox("进行中每日 08:00 / 20:00 提醒")
         self.system_notify_checkbox = QCheckBox("系统通知")
         self.window_popup_checkbox = QCheckBox("窗口弹窗")
         self.email_checkbox = QCheckBox("邮件提醒")
@@ -205,9 +213,7 @@ class MainWindow(QMainWindow):
         form.addRow("检查方式", self.schedule_mode_label)
         form.addRow("提醒时间", self.reminder_time_label)
         form.addRow("", self.remind_first_seen_checkbox)
-        form.addRow("", self.remind_upcoming_checkbox)
-        form.addRow("", self.remind_upcoming_one_hour_checkbox)
-        form.addRow("", self.remind_started_first_hour_checkbox)
+        form.addRow("", self.remind_pre_start_six_hours_checkbox)
         form.addRow("", self.remind_ongoing_checkbox)
         form.addRow("", self.system_notify_checkbox)
         form.addRow("", self.window_popup_checkbox)
@@ -247,13 +253,11 @@ class MainWindow(QMainWindow):
         return group
 
     def _apply_config_to_form(self) -> None:
-        self.schedule_mode_label.setText("每日 08:00 / 14:00 + 活动关键时点")
-        self.reminder_time_label.setText("每日 08:00 / 14:00")
+        self.schedule_mode_label.setText("每日 08:00 / 20:00 + 新活动 14:00 + 关键时点")
+        self.reminder_time_label.setText("每日 08:00 / 20:00（新活动额外 14:00）")
         self.remind_first_seen_checkbox.setChecked(self.config.remind_first_seen)
-        self.remind_upcoming_one_hour_checkbox.setChecked(self.config.remind_upcoming_one_hour)
-        self.remind_started_first_hour_checkbox.setChecked(self.config.remind_started_first_hour)
+        self.remind_pre_start_six_hours_checkbox.setChecked(self.config.remind_pre_start_six_hours)
         self.remind_ongoing_checkbox.setChecked(self.config.remind_ongoing)
-        self.remind_upcoming_checkbox.setChecked(self.config.remind_upcoming)
         self.system_notify_checkbox.setChecked(self.config.enable_system_notification)
         self.window_popup_checkbox.setChecked(self.config.enable_window_popup)
         self.email_checkbox.setChecked(self.config.enable_email)
@@ -274,12 +278,10 @@ class MainWindow(QMainWindow):
             if item.strip()
         )
         self.config.poll_interval_minutes = 0
-        self.config.reminder_time_hours = (8, 14)
+        self.config.reminder_time_hours = (8, 20)
         self.config.remind_first_seen = self.remind_first_seen_checkbox.isChecked()
         self.config.remind_ongoing = self.remind_ongoing_checkbox.isChecked()
-        self.config.remind_upcoming = self.remind_upcoming_checkbox.isChecked()
-        self.config.remind_upcoming_one_hour = self.remind_upcoming_one_hour_checkbox.isChecked()
-        self.config.remind_started_first_hour = self.remind_started_first_hour_checkbox.isChecked()
+        self.config.remind_pre_start_six_hours = self.remind_pre_start_six_hours_checkbox.isChecked()
         self.config.enable_system_notification = self.system_notify_checkbox.isChecked()
         self.config.enable_window_popup = self.window_popup_checkbox.isChecked()
         self.config.enable_email = self.email_checkbox.isChecked()
@@ -365,8 +367,6 @@ class MainWindow(QMainWindow):
         self._append_log(f"触发提醒: {alert.campaign.name} / {alert.reason}")
         if self.config.enable_system_notification and self.tray_icon.isVisible():
             self.tray_icon.showMessage(alert.title, alert.message, QSystemTrayIcon.Information, 10000)
-        if self.config.enable_window_popup:
-            QMessageBox.information(self, alert.title, alert.message)
         if self.config.enable_email:
             subject, body = build_alert_email(alert)
             threading.Thread(
@@ -374,6 +374,8 @@ class MainWindow(QMainWindow):
                 args=(subject, body),
                 daemon=True,
             ).start()
+        if self.config.enable_window_popup:
+            QMessageBox.information(self, alert.title, alert.message)
 
     def _send_email_safe(self, subject: str, body: str) -> None:
         try:
@@ -396,8 +398,21 @@ class MainWindow(QMainWindow):
             self.campaign_layout.addStretch(1)
             return
         for campaign in campaigns:
-            self.campaign_layout.addWidget(CampaignCard(campaign))
+            muted = campaign.campaign_id in self.state.muted_campaign_ids
+            self.campaign_layout.addWidget(
+                CampaignCard(
+                    campaign,
+                    muted=muted,
+                    on_toggle_reminder=lambda campaign_id=campaign.campaign_id: self._toggle_campaign_reminder(campaign_id),
+                )
+            )
         self.campaign_layout.addStretch(1)
+
+    def _toggle_campaign_reminder(self, campaign_id: str) -> None:
+        muted = toggle_campaign_mute(self.state, campaign_id)
+        save_app_state(app_state_path(), self.state)
+        self._render_campaigns(self._latest_campaigns)
+        self._append_log(f"已{'关闭' if muted else '恢复'}活动提醒: {campaign_id}")
 
     def _append_log(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -431,7 +446,9 @@ class MainWindow(QMainWindow):
         if not project_path:
             return
         try:
-            self.config.email_config = import_qqokx_email_config(project_path)
+            imported = import_qqokx_email_config(project_path)
+            imported.recipient_emails = merge_default_recipients(imported.recipient_emails)
+            self.config.email_config = imported
             self.config.enable_email = True
             save_app_config(app_config_path(), self.config)
         except Exception:
@@ -597,19 +614,22 @@ def next_monitor_run_time(
 ) -> datetime:
     candidates = [next_scheduled_run_time(current, daily_hours)]
     for campaign in campaigns:
-        if not campaign.is_upcoming or campaign.countdown_seconds is None:
+        if campaign.countdown_seconds is None:
             continue
-        expected_start = reference_time + timedelta(seconds=campaign.countdown_seconds)
-        if config.remind_upcoming:
-            candidate = expected_start - timedelta(hours=24)
-            if candidate > current:
-                candidates.append(candidate)
-        if config.remind_upcoming_one_hour:
-            candidate = expected_start - timedelta(hours=1)
-            if candidate > current:
-                candidates.append(candidate)
-        if config.remind_started_first_hour and expected_start > current:
-            candidates.append(expected_start)
+        if campaign.is_upcoming:
+            candidates.append(next_scheduled_run_time(current, (14,)))
+            expected_start = reference_time + timedelta(seconds=campaign.countdown_seconds)
+            if expected_start > current:
+                candidates.append(expected_start)
+            if config.remind_pre_start_six_hours:
+                for hours_before_start in range(6, 0, -1):
+                    candidate = expected_start - timedelta(hours=hours_before_start)
+                    if candidate > current:
+                        candidates.append(candidate)
+        if campaign.is_ongoing:
+            ending_reminder = reference_time + timedelta(seconds=campaign.countdown_seconds - 3600)
+            if ending_reminder > current:
+                candidates.append(ending_reminder)
     return min(candidates)
 
 

@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from flash_earn_reminder.models import AppConfig, AppState, Campaign
-from flash_earn_reminder.rules import build_alerts
+from flash_earn_reminder.rules import build_alerts, toggle_campaign_mute
 
 
 def _campaign(
@@ -38,47 +38,72 @@ def test_build_alerts_sends_first_seen_immediately_even_before_daily_slot() -> N
     assert alerts[0].reason == "first_seen"
 
 
-def test_build_alerts_does_not_send_24h_upcoming_by_default() -> None:
-    config = AppConfig(reminder_time_hours=(8, 14))
-    state = AppState(campaign_first_seen_times={"AI": "2026-07-07T06:00:00"})
+def test_build_alerts_skips_muted_campaigns() -> None:
+    config = AppConfig()
+    state = AppState(muted_campaign_ids=["AI"])
 
-    alerts = build_alerts([_campaign(name="AI", countdown_seconds=12 * 3600)], config, state, datetime(2026, 7, 7, 11, 0, 0))
+    alerts = build_alerts([_campaign(name="AI", countdown_seconds=2 * 3600)], config, state, datetime(2026, 7, 7, 11, 0, 0))
 
     assert alerts == []
 
 
-def test_build_alerts_sends_one_hour_before_start_once() -> None:
-    config = AppConfig(reminder_time_hours=(8, 14))
+def test_toggle_campaign_mute_closes_and_restores_a_campaign() -> None:
+    state = AppState()
+
+    assert toggle_campaign_mute(state, "AI") is True
+    assert state.muted_campaign_ids == ["AI"]
+    assert toggle_campaign_mute(state, "AI") is False
+    assert state.muted_campaign_ids == []
+
+
+def test_build_alerts_sends_each_hour_during_six_hours_before_start_once() -> None:
+    config = AppConfig()
     state = AppState(campaign_first_seen_times={"AI": "2026-07-07T06:00:00"})
 
-    first_alerts = build_alerts([_campaign(name="AI", countdown_seconds=3599)], config, state, datetime(2026, 7, 7, 11, 0, 0))
-    second_alerts = build_alerts([_campaign(name="AI", countdown_seconds=3500)], config, state, datetime(2026, 7, 7, 11, 5, 0))
+    first_alerts = build_alerts([_campaign(name="AI", countdown_seconds=6 * 3600)], config, state, datetime(2026, 7, 7, 8, 0, 0))
+    repeated_alerts = build_alerts([_campaign(name="AI", countdown_seconds=6 * 3600 - 30)], config, state, datetime(2026, 7, 7, 8, 0, 30))
+    next_hour_alerts = build_alerts([_campaign(name="AI", countdown_seconds=5 * 3600)], config, state, datetime(2026, 7, 7, 9, 0, 0))
 
     assert len(first_alerts) == 1
-    assert first_alerts[0].reason == "starts_within_1h"
-    assert second_alerts == []
+    assert first_alerts[0].reason == "starts_within_6h"
+    assert repeated_alerts == []
+    assert len(next_hour_alerts) == 1
+    assert next_hour_alerts[0].reason == "starts_within_5h"
 
 
-def test_build_alerts_sends_during_first_hour_after_start() -> None:
-    config = AppConfig(reminder_time_hours=(8, 14))
-    state = AppState(
-        campaign_first_seen_times={"AI": "2026-07-07T06:00:00"},
-        campaign_expected_start_times={"AI": "2026-07-07T14:00:00"},
+def test_build_alerts_sends_new_upcoming_campaign_at_14_once_per_day() -> None:
+    config = AppConfig()
+    state = AppState(campaign_first_seen_times={"AI": "2026-07-09T10:00:00"})
+
+    first_alerts = build_alerts([_campaign(name="AI", countdown_seconds=2 * 86400)], config, state, datetime(2026, 7, 10, 14, 0, 0))
+    repeated_alerts = build_alerts([_campaign(name="AI", countdown_seconds=2 * 86400 - 60)], config, state, datetime(2026, 7, 10, 14, 1, 0))
+
+    assert len(first_alerts) == 1
+    assert first_alerts[0].reason == "new_task_daily"
+    assert repeated_alerts == []
+
+
+def test_build_alerts_sends_once_one_hour_before_ongoing_campaign_ends() -> None:
+    config = AppConfig()
+    state = AppState(campaign_first_seen_times={"AI": "2026-07-09T10:00:00"})
+    campaign = _campaign(
+        name="AI",
+        status_text="进行中",
+        is_ongoing=True,
+        countdown_label="结束倒计时",
+        countdown_seconds=3599,
     )
 
-    alerts = build_alerts(
-        [_campaign(name="AI", status_text="进行中", is_ongoing=True, countdown_label="结束倒计时", countdown_seconds=8 * 3600)],
-        config,
-        state,
-        datetime(2026, 7, 7, 14, 20, 0),
-    )
+    first_alerts = build_alerts([campaign], config, state, datetime(2026, 7, 10, 10, 0, 0))
+    repeated_alerts = build_alerts([campaign], config, state, datetime(2026, 7, 10, 10, 5, 0))
 
-    assert len(alerts) == 1
-    assert alerts[0].reason == "started_first_hour"
+    assert len(first_alerts) == 1
+    assert first_alerts[0].reason == "ends_within_1h"
+    assert repeated_alerts == []
 
 
 def test_build_alerts_waits_until_daily_schedule_for_late_ongoing_reminders() -> None:
-    config = AppConfig(reminder_time_hours=(8, 14))
+    config = AppConfig(reminder_time_hours=(8, 20))
     state = AppState(
         campaign_first_seen_times={"ROBO": "2026-07-06T07:00:00"},
         campaign_expected_start_times={"ROBO": "2026-07-06T08:00:00"},
@@ -94,8 +119,8 @@ def test_build_alerts_waits_until_daily_schedule_for_late_ongoing_reminders() ->
     assert alerts == []
 
 
-def test_build_alerts_sends_ongoing_daily_at_8_and_14() -> None:
-    config = AppConfig(reminder_time_hours=(8, 14))
+def test_build_alerts_sends_ongoing_daily_at_8_and_20() -> None:
+    config = AppConfig(reminder_time_hours=(8, 20))
     state = AppState(
         campaign_first_seen_times={"ROBO": "2026-07-06T07:00:00"},
         campaign_expected_start_times={"ROBO": "2026-07-06T08:00:00"},
@@ -111,20 +136,10 @@ def test_build_alerts_sends_ongoing_daily_at_8_and_14() -> None:
         [_campaign(status_text="进行中", is_ongoing=True, countdown_label="结束倒计时", countdown_seconds=3 * 3600)],
         config,
         state,
-        datetime(2026, 7, 7, 14, 0, 0),
+        datetime(2026, 7, 7, 20, 0, 0),
     )
 
     assert len(morning_alerts) == 1
     assert morning_alerts[0].reason == "ongoing_daily"
     assert len(afternoon_alerts) == 1
     assert afternoon_alerts[0].reason == "ongoing_daily"
-
-
-def test_build_alerts_can_optionally_send_24h_upcoming() -> None:
-    config = AppConfig(reminder_time_hours=(8, 14), remind_upcoming=True)
-    state = AppState(campaign_first_seen_times={"AI": "2026-07-07T06:00:00"})
-
-    alerts = build_alerts([_campaign(name="AI", countdown_seconds=12 * 3600)], config, state, datetime(2026, 7, 7, 11, 0, 0))
-
-    assert len(alerts) == 1
-    assert alerts[0].reason == "starts_within_24h"

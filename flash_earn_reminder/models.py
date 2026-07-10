@@ -12,7 +12,12 @@ class EmailConfig:
     smtp_username: str = ""
     smtp_password: str = ""
     sender_email: str = ""
-    recipient_emails: tuple[str, ...] = ()
+    recipient_emails: tuple[str, ...] = (
+        "conystar@126.com",
+        "187377363220@163.com",
+        "1057902445@qq.com",
+        "xhbyssy@163.com",
+    )
     use_ssl: bool = True
 
 
@@ -20,12 +25,10 @@ class EmailConfig:
 class AppConfig:
     okx_url: str = "https://www.okx.com/zh-hans/flash-earn/stake-to-earn?from-page=trade"
     poll_interval_minutes: int = 0
-    reminder_time_hours: tuple[int, ...] = (8, 14)
+    reminder_time_hours: tuple[int, ...] = (8, 20)
     remind_first_seen: bool = True
     remind_ongoing: bool = True
-    remind_upcoming: bool = False
-    remind_upcoming_one_hour: bool = True
-    remind_started_first_hour: bool = True
+    remind_pre_start_six_hours: bool = True
     enable_system_notification: bool = True
     enable_window_popup: bool = True
     enable_email: bool = True
@@ -39,6 +42,7 @@ class AppState:
     last_alert_times: dict[str, str] = field(default_factory=dict)
     campaign_first_seen_times: dict[str, str] = field(default_factory=dict)
     campaign_expected_start_times: dict[str, str] = field(default_factory=dict)
+    muted_campaign_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

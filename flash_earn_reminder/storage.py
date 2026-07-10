@@ -36,23 +36,13 @@ def load_app_config(path: Path | None = None) -> AppConfig:
         return config
     payload = json.loads(target.read_text(encoding="utf-8"))
     email_payload = payload.get("email_config", {})
-    raw_schedule = payload.get("reminder_time_hours")
-    if isinstance(raw_schedule, list) and raw_schedule:
-        reminder_time_hours = tuple(int(item) for item in raw_schedule)
-    else:
-        reminder_time_hours = (
-            int(payload.get("reminder_time_hour", payload.get("reminder_interval_hours", 8))),
-            14,
-        )
     return AppConfig(
         okx_url=str(payload.get("okx_url", AppConfig.okx_url)),
         poll_interval_minutes=int(payload.get("poll_interval_minutes", 0)),
-        reminder_time_hours=reminder_time_hours,
+        reminder_time_hours=(8, 20),
         remind_first_seen=bool(payload.get("remind_first_seen", True)),
         remind_ongoing=bool(payload.get("remind_ongoing", True)),
-        remind_upcoming=bool(payload.get("remind_upcoming", False)),
-        remind_upcoming_one_hour=bool(payload.get("remind_upcoming_one_hour", True)),
-        remind_started_first_hour=bool(payload.get("remind_started_first_hour", True)),
+        remind_pre_start_six_hours=bool(payload.get("remind_pre_start_six_hours", True)),
         enable_system_notification=bool(payload.get("enable_system_notification", True)),
         enable_window_popup=bool(payload.get("enable_window_popup", True)),
         enable_email=bool(payload.get("enable_email", True)),
@@ -87,6 +77,7 @@ def load_app_state(path: Path | None = None) -> AppState:
         last_alert_times=dict(payload.get("last_alert_times", {})),
         campaign_first_seen_times=dict(payload.get("campaign_first_seen_times", {})),
         campaign_expected_start_times=dict(payload.get("campaign_expected_start_times", {})),
+        muted_campaign_ids=[str(item) for item in payload.get("muted_campaign_ids", [])],
     )
 
 

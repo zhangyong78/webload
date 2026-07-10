@@ -1,5 +1,6 @@
-from flash_earn_reminder.emailing import build_alert_email, build_simulated_ongoing_email, email_config_from_snapshot
-from flash_earn_reminder.models import AlertEvent, Campaign
+from flash_earn_reminder.emailing import build_alert_email, build_simulated_ongoing_email, email_config_from_snapshot, send_email_alert
+from flash_earn_reminder.models import AlertEvent, AppState, Campaign, EmailConfig
+from flash_earn_reminder.storage import load_app_state, save_app_state
 
 
 def test_email_config_from_snapshot_parses_recipients() -> None:
@@ -20,6 +21,45 @@ def test_email_config_from_snapshot_parses_recipients() -> None:
     assert config.smtp_host == "smtp.126.com"
     assert config.smtp_port == 465
     assert config.recipient_emails == ("a@example.com", "b@example.com", "c@example.com")
+
+
+def test_default_email_config_includes_requested_recipients() -> None:
+    assert EmailConfig().recipient_emails == (
+        "conystar@126.com",
+        "187377363220@163.com",
+        "1057902445@qq.com",
+        "xhbyssy@163.com",
+    )
+
+
+def test_send_email_alert_sends_a_private_message_to_each_recipient(monkeypatch) -> None:
+    messages = []
+
+    class FakeSMTP:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def login(self, username, password) -> None:
+            return None
+
+        def send_message(self, message) -> None:
+            messages.append(message)
+
+    monkeypatch.setattr("flash_earn_reminder.emailing.smtplib.SMTP_SSL", lambda *args, **kwargs: FakeSMTP())
+    config = EmailConfig(
+        enabled=True,
+        smtp_host="smtp.example.com",
+        sender_email="sender@example.com",
+        recipient_emails=("first@example.com", "second@example.com"),
+        use_ssl=True,
+    )
+
+    send_email_alert(subject="test", body="body", config=config)
+
+    assert [message["To"] for message in messages] == ["first@example.com", "second@example.com"]
 
 
 def test_build_simulated_ongoing_email_uses_robo_campaign_copy() -> None:
@@ -66,3 +106,12 @@ def test_build_alert_email_uses_simple_flash_earn_copy() -> None:
     assert "总奖励：8,000,000 AI" in body
     assert "支持币种：BTC、OKSOL、OKB、AI" in body
     assert "倒计时：02 日 17 时 18 分 31 秒" in body
+
+
+def test_muted_campaigns_persist_in_local_state(tmp_path) -> None:
+    state_path = tmp_path / "app_state.json"
+    save_app_state(state_path, AppState(muted_campaign_ids=["AI"]))
+
+    state = load_app_state(state_path)
+
+    assert state.muted_campaign_ids == ["AI"]

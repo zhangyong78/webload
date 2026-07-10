@@ -14,12 +14,15 @@ def build_alerts(
     alerts: list[AlertEvent] = []
     slot_hour = _current_slot_hour(now, config.reminder_time_hours)
     for campaign in campaigns:
+        if campaign.campaign_id in state.muted_campaign_ids:
+            continue
         first_seen = _get_or_set_first_seen(state, campaign, now)
         expected_start_at = _update_expected_start_time(state, campaign, now)
-        reason = _match_reason(campaign, config, now, first_seen, expected_start_at, slot_hour)
+        expected_end_at = _expected_end_time(campaign, now)
+        reason = _match_reason(campaign, config, now, first_seen, expected_start_at, expected_end_at, slot_hour)
         if not reason:
             continue
-        state_key = _build_state_key(campaign.campaign_id, reason, now, slot_hour, expected_start_at)
+        state_key = _build_state_key(campaign.campaign_id, reason, now, slot_hour, expected_start_at, expected_end_at)
         if _parse_datetime(state.last_alert_times.get(state_key)) is not None:
             continue
         state.last_alert_times[state_key] = now.isoformat()
@@ -51,39 +54,33 @@ def _update_expected_start_time(state: AppState, campaign: Campaign, now: dateti
     return existing
 
 
+def _expected_end_time(campaign: Campaign, now: datetime) -> datetime | None:
+    if campaign.is_ongoing and campaign.countdown_seconds is not None:
+        return now + timedelta(seconds=campaign.countdown_seconds)
+    return None
+
+
 def _match_reason(
     campaign: Campaign,
     config: AppConfig,
     now: datetime,
     first_seen: datetime,
     expected_start_at: datetime | None,
+    expected_end_at: datetime | None,
     slot_hour: int | None,
 ) -> str | None:
     if config.remind_first_seen and first_seen == now:
         return "first_seen"
-    if (
-        config.remind_upcoming_one_hour
-        and campaign.is_upcoming
-        and campaign.countdown_seconds is not None
-        and 0 <= campaign.countdown_seconds <= 3600
-    ):
-        return "starts_within_1h"
-    if (
-        config.remind_started_first_hour
-        and campaign.is_ongoing
-        and expected_start_at is not None
-        and expected_start_at <= now < expected_start_at + timedelta(hours=1)
-    ):
-        return "started_first_hour"
+    if config.remind_pre_start_six_hours and campaign.is_upcoming and campaign.countdown_seconds is not None:
+        remaining_hours = (campaign.countdown_seconds + 3599) // 3600
+        if 1 <= remaining_hours <= 6:
+            return f"starts_within_{remaining_hours}h"
+    if campaign.is_ongoing and campaign.countdown_seconds is not None and 0 <= campaign.countdown_seconds <= 3600:
+        return "ends_within_1h"
     if config.remind_ongoing and campaign.is_ongoing and slot_hour is not None and now.hour == slot_hour:
         return "ongoing_daily"
-    if (
-        config.remind_upcoming
-        and campaign.is_upcoming
-        and campaign.countdown_seconds is not None
-        and 3600 < campaign.countdown_seconds <= 86400
-    ):
-        return "starts_within_24h"
+    if campaign.is_upcoming and first_seen < now and now.hour == 14:
+        return "new_task_daily"
     return None
 
 
@@ -102,25 +99,39 @@ def _build_state_key(
     now: datetime,
     slot_hour: int | None,
     expected_start_at: datetime | None,
+    expected_end_at: datetime | None,
 ) -> str:
     if reason == "ongoing_daily":
         return f"{campaign_id}|{now.date().isoformat()}|{slot_hour:02d}"
+    if reason == "new_task_daily":
+        return f"{campaign_id}|{now.date().isoformat()}|14"
     if reason == "first_seen":
         return f"{campaign_id}|first_seen"
-    event_marker = (expected_start_at or now).date().isoformat()
+    event_marker = (expected_start_at or expected_end_at or now).date().isoformat()
     return f"{campaign_id}|{reason}|{event_marker}"
 
 
 def _build_message(campaign: Campaign, reason: str) -> str:
     if reason == "first_seen":
         return f"{campaign.name} 首次被检测到，当前状态 {campaign.status_text or '未知'}，倒计时 {campaign.countdown_text or '-'}。"
-    if reason == "starts_within_1h":
-        return f"{campaign.name} 将在 1 小时内开始，当前倒计时 {campaign.countdown_text or '-'}。"
-    if reason == "started_first_hour":
-        return f"{campaign.name} 已开始且处于第 1 个小时内，奖励 {campaign.reward_text}。"
+    if reason.startswith("starts_within_"):
+        remaining_hours = reason.removeprefix("starts_within_").removesuffix("h")
+        return f"{campaign.name} 将在 {remaining_hours} 小时内开始，当前倒计时 {campaign.countdown_text or '-'}。"
+    if reason == "ends_within_1h":
+        return f"{campaign.name} 将在 1 小时内结束，当前倒计时 {campaign.countdown_text or '-'}。"
     if reason == "ongoing_daily":
         return f"{campaign.name} 当前进行中，奖励 {campaign.reward_text}。"
-    return f"{campaign.name} 将在 24 小时内开始，当前倒计时 {campaign.countdown_text or '-'}。"
+    if reason == "new_task_daily":
+        return f"{campaign.name} 是已发现的新活动，当前倒计时 {campaign.countdown_text or '-'}。"
+    return f"{campaign.name} 当前状态 {campaign.status_text or '未知'}。"
+
+
+def toggle_campaign_mute(state: AppState, campaign_id: str) -> bool:
+    if campaign_id in state.muted_campaign_ids:
+        state.muted_campaign_ids.remove(campaign_id)
+        return False
+    state.muted_campaign_ids.append(campaign_id)
+    return True
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
