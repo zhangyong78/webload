@@ -71,6 +71,20 @@ def _match_reason(
 ) -> str | None:
     if config.remind_first_seen and first_seen == now:
         return "first_seen"
+    if (
+        config.remind_pre_start_twenty_five_hours
+        and campaign.is_upcoming
+        and campaign.countdown_seconds is not None
+        and 24 * 3600 < campaign.countdown_seconds <= 25 * 3600
+    ):
+        return "starts_within_25h"
+    if (
+        config.remind_pre_start_thirty_minutes
+        and campaign.is_upcoming
+        and campaign.countdown_seconds is not None
+        and 0 < campaign.countdown_seconds <= 30 * 60
+    ):
+        return "starts_within_30m"
     if config.remind_pre_start_six_hours and campaign.is_upcoming and campaign.countdown_seconds is not None:
         remaining_hours = (campaign.countdown_seconds + 3599) // 3600
         if 1 <= remaining_hours <= 6:
@@ -114,6 +128,8 @@ def _build_state_key(
 def _build_message(campaign: Campaign, reason: str) -> str:
     if reason == "first_seen":
         return f"{campaign.name} 首次被检测到，当前状态 {campaign.status_text or '未知'}，倒计时 {campaign.countdown_text or '-'}。"
+    if reason == "starts_within_30m":
+        return f"{campaign.name} 将在 30 分钟内开始，当前倒计时 {campaign.countdown_text or '-'}。"
     if reason.startswith("starts_within_"):
         remaining_hours = reason.removeprefix("starts_within_").removesuffix("h")
         return f"{campaign.name} 将在 {remaining_hours} 小时内开始，当前倒计时 {campaign.countdown_text or '-'}。"

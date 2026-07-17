@@ -28,6 +28,8 @@ class AppConfig:
     reminder_time_hours: tuple[int, ...] = (8, 20)
     remind_first_seen: bool = True
     remind_ongoing: bool = True
+    remind_pre_start_twenty_five_hours: bool = True
+    remind_pre_start_thirty_minutes: bool = True
     remind_pre_start_six_hours: bool = True
     enable_system_notification: bool = True
     enable_window_popup: bool = True
@@ -75,3 +77,4 @@ class MonitorCycleResult:
     alerts: list[AlertEvent] = field(default_factory=list)
     checked_at: datetime | None = None
     error: str = ""
+    check_source: str = "自动"

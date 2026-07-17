@@ -1,6 +1,6 @@
 from flash_earn_reminder.emailing import build_alert_email, build_simulated_ongoing_email, email_config_from_snapshot, send_email_alert
 from flash_earn_reminder.models import AlertEvent, AppState, Campaign, EmailConfig
-from flash_earn_reminder.storage import load_app_state, save_app_state
+from flash_earn_reminder.storage import load_app_config, load_app_state, save_app_state
 
 
 def test_email_config_from_snapshot_parses_recipients() -> None:
@@ -30,6 +30,24 @@ def test_default_email_config_includes_requested_recipients() -> None:
         "1057902445@qq.com",
         "xhbyssy@163.com",
     )
+
+
+def test_load_app_config_enables_twenty_five_hour_reminder_by_default(tmp_path) -> None:
+    config_path = tmp_path / "app_config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    config = load_app_config(config_path)
+
+    assert config.remind_pre_start_twenty_five_hours is True
+
+
+def test_load_app_config_enables_thirty_minute_reminder_by_default(tmp_path) -> None:
+    config_path = tmp_path / "app_config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    config = load_app_config(config_path)
+
+    assert config.remind_pre_start_thirty_minutes is True
 
 
 def test_send_email_alert_sends_a_private_message_to_each_recipient(monkeypatch) -> None:

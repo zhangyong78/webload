@@ -71,6 +71,48 @@ def test_build_alerts_sends_each_hour_during_six_hours_before_start_once() -> No
     assert next_hour_alerts[0].reason == "starts_within_5h"
 
 
+def test_build_alerts_sends_once_during_twenty_fifth_hour_before_start() -> None:
+    config = AppConfig()
+    state = AppState(campaign_first_seen_times={"AI": "2026-07-16T09:00:00"})
+
+    first_alerts = build_alerts(
+        [_campaign(name="AI", countdown_seconds=25 * 3600)],
+        config,
+        state,
+        datetime(2026, 7, 17, 9, 0, 0),
+    )
+    repeated_alerts = build_alerts(
+        [_campaign(name="AI", countdown_seconds=24 * 3600 + 59 * 60)],
+        config,
+        state,
+        datetime(2026, 7, 17, 9, 1, 0),
+    )
+
+    assert [alert.reason for alert in first_alerts] == ["starts_within_25h"]
+    assert repeated_alerts == []
+
+
+def test_build_alerts_sends_once_thirty_minutes_before_start() -> None:
+    config = AppConfig()
+    state = AppState(campaign_first_seen_times={"AI": "2026-07-17T08:00:00"})
+
+    first_alerts = build_alerts(
+        [_campaign(name="AI", countdown_seconds=30 * 60)],
+        config,
+        state,
+        datetime(2026, 7, 17, 9, 0, 0),
+    )
+    repeated_alerts = build_alerts(
+        [_campaign(name="AI", countdown_seconds=29 * 60)],
+        config,
+        state,
+        datetime(2026, 7, 17, 9, 1, 0),
+    )
+
+    assert [alert.reason for alert in first_alerts] == ["starts_within_30m"]
+    assert repeated_alerts == []
+
+
 def test_build_alerts_sends_new_upcoming_campaign_at_14_once_per_day() -> None:
     config = AppConfig()
     state = AppState(campaign_first_seen_times={"AI": "2026-07-09T10:00:00"})
