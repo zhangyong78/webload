@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import threading
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -34,7 +35,7 @@ from flash_earn_reminder.emailing import build_alert_email, build_simulated_ongo
 from flash_earn_reminder.instance_guard import SingleInstanceGuard
 from flash_earn_reminder.models import AlertEvent, AppConfig, AppState, Campaign, EmailConfig
 from flash_earn_reminder.monitor import run_monitor_cycle
-from flash_earn_reminder.rules import toggle_campaign_mute
+from flash_earn_reminder.rules import build_alerts, toggle_campaign_mute
 from flash_earn_reminder.storage import app_config_path, app_state_path, load_app_config, load_app_state, save_app_config, save_app_state
 
 
@@ -119,7 +120,7 @@ class MainWindow(QMainWindow):
         self._append_log("应用已启动。")
         self._rearm_timer()
         QTimer.singleShot(0, self._present_initial_window)
-        QTimer.singleShot(200, self.check_now)
+        QTimer.singleShot(200, lambda: self.check_now("启动"))
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -147,7 +148,7 @@ class MainWindow(QMainWindow):
 
         action_row = QHBoxLayout()
         self.check_now_button = QPushButton("立即检查")
-        self.check_now_button.clicked.connect(self.check_now)
+        self.check_now_button.clicked.connect(lambda: self.check_now("手动"))
         self.pause_button = QPushButton("暂停")
         self.pause_button.clicked.connect(self.toggle_running)
         self.save_button = QPushButton("保存配置")
@@ -196,7 +197,7 @@ class MainWindow(QMainWindow):
         root_layout.addLayout(body_layout, 1)
 
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self.check_now)
+        self.timer.timeout.connect(lambda: self.check_now("自动"))
 
     def _build_settings_group(self) -> QGroupBox:
         group = QGroupBox("提醒设置")
@@ -204,6 +205,8 @@ class MainWindow(QMainWindow):
         self.schedule_mode_label = QLabel("每日 08:00 / 20:00 + 新活动 14:00 + 关键时点")
         self.reminder_time_label = QLabel()
         self.remind_first_seen_checkbox = QCheckBox("首次发现立即提醒")
+        self.remind_pre_start_twenty_five_hours_checkbox = QCheckBox("开始前 25 小时提醒一次")
+        self.remind_pre_start_thirty_minutes_checkbox = QCheckBox("开始前 30 分钟提醒一次")
         self.remind_pre_start_six_hours_checkbox = QCheckBox("开始前 6 小时内每小时提醒")
         self.remind_ongoing_checkbox = QCheckBox("进行中每日 08:00 / 20:00 提醒")
         self.system_notify_checkbox = QCheckBox("系统通知")
@@ -213,6 +216,8 @@ class MainWindow(QMainWindow):
         form.addRow("检查方式", self.schedule_mode_label)
         form.addRow("提醒时间", self.reminder_time_label)
         form.addRow("", self.remind_first_seen_checkbox)
+        form.addRow("", self.remind_pre_start_twenty_five_hours_checkbox)
+        form.addRow("", self.remind_pre_start_thirty_minutes_checkbox)
         form.addRow("", self.remind_pre_start_six_hours_checkbox)
         form.addRow("", self.remind_ongoing_checkbox)
         form.addRow("", self.system_notify_checkbox)
@@ -256,6 +261,8 @@ class MainWindow(QMainWindow):
         self.schedule_mode_label.setText("每日 08:00 / 20:00 + 新活动 14:00 + 关键时点")
         self.reminder_time_label.setText("每日 08:00 / 20:00（新活动额外 14:00）")
         self.remind_first_seen_checkbox.setChecked(self.config.remind_first_seen)
+        self.remind_pre_start_twenty_five_hours_checkbox.setChecked(self.config.remind_pre_start_twenty_five_hours)
+        self.remind_pre_start_thirty_minutes_checkbox.setChecked(self.config.remind_pre_start_thirty_minutes)
         self.remind_pre_start_six_hours_checkbox.setChecked(self.config.remind_pre_start_six_hours)
         self.remind_ongoing_checkbox.setChecked(self.config.remind_ongoing)
         self.system_notify_checkbox.setChecked(self.config.enable_system_notification)
@@ -281,6 +288,8 @@ class MainWindow(QMainWindow):
         self.config.reminder_time_hours = (8, 20)
         self.config.remind_first_seen = self.remind_first_seen_checkbox.isChecked()
         self.config.remind_ongoing = self.remind_ongoing_checkbox.isChecked()
+        self.config.remind_pre_start_twenty_five_hours = self.remind_pre_start_twenty_five_hours_checkbox.isChecked()
+        self.config.remind_pre_start_thirty_minutes = self.remind_pre_start_thirty_minutes_checkbox.isChecked()
         self.config.remind_pre_start_six_hours = self.remind_pre_start_six_hours_checkbox.isChecked()
         self.config.enable_system_notification = self.system_notify_checkbox.isChecked()
         self.config.enable_window_popup = self.window_popup_checkbox.isChecked()
@@ -331,30 +340,42 @@ class MainWindow(QMainWindow):
         self._append_log("轮询已恢复。" if self._running else "轮询已暂停。")
         self._rearm_timer()
 
-    def check_now(self) -> None:
+    def check_now(self, source: str = "手动") -> None:
         if not self._running or self._refreshing:
             return
         self._refreshing = True
         self.running_label.setText("检查中")
-        thread = threading.Thread(target=self._run_cycle_worker, daemon=True)
+        thread = threading.Thread(target=self._run_cycle_worker, args=(source,), daemon=True)
         thread.start()
 
-    def _run_cycle_worker(self) -> None:
-        result = run_monitor_cycle(self.config, self.state)
+    def _run_cycle_worker(self, source: str) -> None:
+        result = run_monitor_cycle(self.config, self.state, check_source=source)
         self._signals.cycle_finished.emit(result)
 
     def _handle_cycle_result(self, result: object) -> None:
         self._refreshing = False
         if not hasattr(result, "campaigns"):
             return
+        used_cached_campaigns = False
+        previous_checked_at = self._last_checked_at
+        if not result.error and not result.campaigns and self._latest_campaigns and previous_checked_at is not None:
+            elapsed_seconds = max(0, int((result.checked_at - previous_checked_at).total_seconds()))
+            cached_campaigns = reuse_active_cached_campaigns(self._latest_campaigns, elapsed_seconds=elapsed_seconds)
+            if cached_campaigns:
+                result.campaigns = cached_campaigns
+                result.alerts = build_alerts(cached_campaigns, self.config, self.state, result.checked_at)
+                used_cached_campaigns = True
         self._last_checked_at = result.checked_at
         self._latest_campaigns = list(result.campaigns)
         if result.error:
             self.running_label.setText("检查失败")
-            self._append_log(f"检查失败: {result.error}")
+            self._append_log(f"检查失败（{result.check_source}）: {result.error}")
+        elif used_cached_campaigns:
+            self.running_label.setText("运行中" if self._running else "已暂停")
+            self._append_log(f"页面返回空活动（{result.check_source}），沿用上一轮 {len(result.campaigns)} 个活动。")
         else:
             self.running_label.setText("运行中" if self._running else "已暂停")
-            self._append_log(f"检查完成，发现 {len(result.campaigns)} 个活动。")
+            self._append_log(f"检查完成（{result.check_source}），发现 {len(result.campaigns)} 个活动。")
         self.last_check_label.setText(_format_dt(result.checked_at))
         self.next_check_label.setText(_format_dt(self._next_run_time()))
         self._render_campaigns(result.campaigns)
@@ -415,8 +436,7 @@ class MainWindow(QMainWindow):
         self._append_log(f"已{'关闭' if muted else '恢复'}活动提醒: {campaign_id}")
 
     def _append_log(self, message: str) -> None:
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_output.append(f"[{timestamp}] {message}")
+        self.log_output.append(format_log_entry(datetime.now(), message))
 
     def _handle_email_error(self, message: str) -> None:
         self._append_log(f"邮件发送失败: {message}")
@@ -428,7 +448,7 @@ class MainWindow(QMainWindow):
         open_action = QAction("打开主窗口", self)
         open_action.triggered.connect(self._restore_window)
         check_action = QAction("立即检查一次", self)
-        check_action.triggered.connect(self.check_now)
+        check_action.triggered.connect(lambda: self.check_now("手动"))
         pause_action = QAction("暂停/继续", self)
         pause_action.triggered.connect(self.toggle_running)
         exit_action = QAction("退出", self)
@@ -594,6 +614,36 @@ def _format_dt(value: datetime | None) -> str:
     return value.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def format_log_entry(timestamp: datetime, message: str) -> str:
+    return f"[{_format_dt(timestamp)}] {message}"
+
+
+def reuse_active_cached_campaigns(campaigns: list[Campaign], *, elapsed_seconds: int) -> list[Campaign]:
+    elapsed = max(0, int(elapsed_seconds))
+    cached_campaigns: list[Campaign] = []
+    for campaign in campaigns:
+        if campaign.countdown_seconds is None:
+            continue
+        remaining_seconds = max(0, campaign.countdown_seconds - elapsed)
+        if remaining_seconds == 0:
+            continue
+        cached_campaigns.append(
+            replace(
+                campaign,
+                countdown_seconds=remaining_seconds,
+                countdown_text=_format_countdown_text(remaining_seconds),
+            )
+        )
+    return cached_campaigns
+
+
+def _format_countdown_text(total_seconds: int) -> str:
+    days, remainder = divmod(max(0, total_seconds), 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{days:02d} 日 {hours:02d} 时 {minutes:02d} 分 {seconds:02d} 秒"
+
+
 def next_scheduled_run_time(current: datetime, hours: tuple[int, ...]) -> datetime:
     valid_hours = sorted({int(hour) for hour in hours if 0 <= int(hour) <= 23})
     for hour in valid_hours:
@@ -621,6 +671,14 @@ def next_monitor_run_time(
             expected_start = reference_time + timedelta(seconds=campaign.countdown_seconds)
             if expected_start > current:
                 candidates.append(expected_start)
+            if config.remind_pre_start_twenty_five_hours:
+                candidate = expected_start - timedelta(hours=25)
+                if candidate > current:
+                    candidates.append(candidate)
+            if config.remind_pre_start_thirty_minutes:
+                candidate = expected_start - timedelta(minutes=30)
+                if candidate > current:
+                    candidates.append(candidate)
             if config.remind_pre_start_six_hours:
                 for hours_before_start in range(6, 0, -1):
                     candidate = expected_start - timedelta(hours=hours_before_start)
