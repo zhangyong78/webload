@@ -19,21 +19,20 @@ def build_alerts(
         first_seen = _get_or_set_first_seen(state, campaign, now)
         expected_start_at = _update_expected_start_time(state, campaign, now)
         expected_end_at = _expected_end_time(campaign, now)
-        reason = _match_reason(campaign, config, now, first_seen, expected_start_at, expected_end_at, slot_hour)
-        if not reason:
-            continue
-        state_key = _build_state_key(campaign.campaign_id, reason, now, slot_hour, expected_start_at, expected_end_at)
-        if _parse_datetime(state.last_alert_times.get(state_key)) is not None:
-            continue
-        state.last_alert_times[state_key] = now.isoformat()
-        alerts.append(
-            AlertEvent(
-                campaign=campaign,
-                reason=reason,
-                title=f"OKX Flash Earn 提醒: {campaign.name}",
-                message=_build_message(campaign, reason),
+        reasons = _match_reasons(campaign, config, now, first_seen, expected_start_at, expected_end_at, slot_hour)
+        for reason in reasons:
+            state_key = _build_state_key(campaign.campaign_id, reason, now, slot_hour, expected_start_at, expected_end_at)
+            if _parse_datetime(state.last_alert_times.get(state_key)) is not None:
+                continue
+            state.last_alert_times[state_key] = now.isoformat()
+            alerts.append(
+                AlertEvent(
+                    campaign=campaign,
+                    reason=reason,
+                    title=f"OKX Flash Earn 提醒: {campaign.name}",
+                    message=_build_message(campaign, reason),
+                )
             )
-        )
     return alerts
 
 
@@ -60,7 +59,7 @@ def _expected_end_time(campaign: Campaign, now: datetime) -> datetime | None:
     return None
 
 
-def _match_reason(
+def _match_reasons(
     campaign: Campaign,
     config: AppConfig,
     now: datetime,
@@ -68,34 +67,26 @@ def _match_reason(
     expected_start_at: datetime | None,
     expected_end_at: datetime | None,
     slot_hour: int | None,
-) -> str | None:
+) -> list[str]:
+    reasons: list[str] = []
     if config.remind_first_seen and first_seen == now:
-        return "first_seen"
-    if (
-        config.remind_pre_start_twenty_five_hours
-        and campaign.is_upcoming
-        and campaign.countdown_seconds is not None
-        and 24 * 3600 < campaign.countdown_seconds <= 25 * 3600
-    ):
-        return "starts_within_25h"
-    if (
-        config.remind_pre_start_thirty_minutes
-        and campaign.is_upcoming
-        and campaign.countdown_seconds is not None
-        and 0 < campaign.countdown_seconds <= 30 * 60
-    ):
-        return "starts_within_30m"
-    if config.remind_pre_start_six_hours and campaign.is_upcoming and campaign.countdown_seconds is not None:
-        remaining_hours = (campaign.countdown_seconds + 3599) // 3600
-        if 1 <= remaining_hours <= 6:
-            return f"starts_within_{remaining_hours}h"
+        reasons.append("first_seen")
+    elif campaign.is_upcoming and campaign.countdown_seconds is not None:
+        if config.remind_pre_start_twenty_five_hours and 24 * 3600 < campaign.countdown_seconds <= 25 * 3600:
+            reasons.append("starts_within_25h")
+        if config.remind_pre_start_thirty_minutes and 0 < campaign.countdown_seconds <= 30 * 60:
+            reasons.append("starts_within_30m")
+        elif config.remind_pre_start_six_hours:
+            remaining_hours = (campaign.countdown_seconds + 3599) // 3600
+            if 1 <= remaining_hours <= 6:
+                reasons.append(f"starts_within_{remaining_hours}h")
     if campaign.is_ongoing and campaign.countdown_seconds is not None and 0 <= campaign.countdown_seconds <= 3600:
-        return "ends_within_1h"
+        reasons.append("ends_within_1h")
     if config.remind_ongoing and campaign.is_ongoing and slot_hour is not None and now.hour == slot_hour:
-        return "ongoing_daily"
+        reasons.append("ongoing_daily")
     if campaign.is_upcoming and first_seen < now and now.hour == 14:
-        return "new_task_daily"
-    return None
+        reasons.append("new_task_daily")
+    return reasons
 
 
 def _current_slot_hour(now: datetime, reminder_time_hours: tuple[int, ...]) -> int | None:

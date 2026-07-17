@@ -11,6 +11,7 @@ from flash_earn_reminder.ui import (
     next_monitor_run_time,
     next_scheduled_run_time,
     reuse_active_cached_campaigns,
+    timer_interval_ms,
 )
 
 
@@ -137,6 +138,13 @@ def test_format_log_entry_includes_date_and_check_source() -> None:
     result = format_log_entry(datetime(2026, 7, 17, 9, 0, 0), "检查完成（自动）")
 
     assert result == "[2026-07-17 09:00:00] 检查完成（自动）"
+
+
+def test_timer_interval_rounds_up_to_avoid_early_timeout() -> None:
+    current = datetime(2026, 7, 17, 19, 59, 58, 499100)
+    target = datetime(2026, 7, 17, 20, 0, 0)
+
+    assert timer_interval_ms(current, target) == 1501
 
 
 def test_next_monitor_run_time_falls_back_to_daily_slot_when_no_special_event() -> None:

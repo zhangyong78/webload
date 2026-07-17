@@ -144,6 +144,22 @@ def test_build_alerts_sends_once_one_hour_before_ongoing_campaign_ends() -> None
     assert repeated_alerts == []
 
 
+def test_build_alerts_keeps_daily_and_end_reminders_when_both_match() -> None:
+    config = AppConfig(reminder_time_hours=(8, 20))
+    state = AppState(campaign_first_seen_times={"AI": "2026-07-09T10:00:00"})
+    campaign = _campaign(
+        name="AI",
+        status_text="进行中",
+        is_ongoing=True,
+        countdown_label="结束倒计时",
+        countdown_seconds=3599,
+    )
+
+    alerts = build_alerts([campaign], config, state, datetime(2026, 7, 10, 20, 0, 1))
+
+    assert {alert.reason for alert in alerts} == {"ends_within_1h", "ongoing_daily"}
+
+
 def test_build_alerts_waits_until_daily_schedule_for_late_ongoing_reminders() -> None:
     config = AppConfig(reminder_time_hours=(8, 20))
     state = AppState(

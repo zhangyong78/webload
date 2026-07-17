@@ -5,6 +5,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
+from math import ceil
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
@@ -197,6 +198,7 @@ class MainWindow(QMainWindow):
         root_layout.addLayout(body_layout, 1)
 
         self.timer = QTimer(self)
+        self.timer.setTimerType(Qt.PreciseTimer)
         self.timer.timeout.connect(lambda: self.check_now("自动"))
 
     def _build_settings_group(self) -> QGroupBox:
@@ -376,6 +378,8 @@ class MainWindow(QMainWindow):
         else:
             self.running_label.setText("运行中" if self._running else "已暂停")
             self._append_log(f"检查完成（{result.check_source}），发现 {len(result.campaigns)} 个活动。")
+        if not result.error and result.campaigns and not result.alerts:
+            self._append_log(f"本次未触发提醒，规则判定时间 {_format_dt(result.checked_at)}。")
         self.last_check_label.setText(_format_dt(result.checked_at))
         self.next_check_label.setText(_format_dt(self._next_run_time()))
         self._render_campaigns(result.campaigns)
@@ -515,7 +519,7 @@ class MainWindow(QMainWindow):
         self.next_check_label.setText(_format_dt(next_run))
         if next_run is None:
             return
-        interval_ms = max(1000, int((next_run - datetime.now()).total_seconds() * 1000))
+        interval_ms = timer_interval_ms(datetime.now(), next_run)
         self.timer.start(interval_ms)
 
     def _next_run_time(self) -> datetime | None:
@@ -616,6 +620,10 @@ def _format_dt(value: datetime | None) -> str:
 
 def format_log_entry(timestamp: datetime, message: str) -> str:
     return f"[{_format_dt(timestamp)}] {message}"
+
+
+def timer_interval_ms(current: datetime, target: datetime) -> int:
+    return max(1000, ceil((target - current).total_seconds() * 1000))
 
 
 def reuse_active_cached_campaigns(campaigns: list[Campaign], *, elapsed_seconds: int) -> list[Campaign]:
