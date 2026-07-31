@@ -46,6 +46,31 @@ class WorkerSignals(QObject):
     email_failed = Signal(str)
 
 
+class AlertPopupController:
+    def __init__(self, parent: QWidget | None) -> None:
+        self._dialog = QMessageBox(parent)
+        self._dialog.setIcon(QMessageBox.Information)
+        self._dialog.setStandardButtons(QMessageBox.Ok)
+        self._dialog.setModal(False)
+        self._dialog.finished.connect(self._reset_count)
+        self._count = 0
+
+    def show(self, title: str, message: str) -> QMessageBox:
+        if not self._dialog.isVisible():
+            self._count = 0
+        self._count += 1
+        self._dialog.setWindowTitle(title)
+        self._dialog.setText(message)
+        self._dialog.setInformativeText(f"窗口未关闭期间累计 {self._count} 条提醒。")
+        self._dialog.show()
+        self._dialog.raise_()
+        self._dialog.activateWindow()
+        return self._dialog
+
+    def _reset_count(self, _result: int) -> None:
+        self._count = 0
+
+
 def merge_default_recipients(recipients: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys((*EmailConfig().recipient_emails, *recipients)))
 
@@ -112,6 +137,7 @@ class MainWindow(QMainWindow):
         self._last_checked_at: datetime | None = None
         self._latest_campaigns: list[Campaign] = []
         self._has_presented_once = False
+        self._alert_popup_controller = AlertPopupController(self)
 
         self._maybe_bootstrap_email_config()
         self._build_ui()
@@ -400,7 +426,7 @@ class MainWindow(QMainWindow):
                 daemon=True,
             ).start()
         if self.config.enable_window_popup:
-            QMessageBox.information(self, alert.title, alert.message)
+            self._alert_popup_controller.show(alert.title, alert.message)
 
     def _send_email_safe(self, subject: str, body: str) -> None:
         try:

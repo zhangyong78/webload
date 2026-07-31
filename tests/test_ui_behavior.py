@@ -1,9 +1,12 @@
 from datetime import datetime
 from types import SimpleNamespace
 
+from PySide6.QtWidgets import QApplication
+
 from flash_earn_reminder.models import AppConfig, Campaign
 from flash_earn_reminder.models import AlertEvent, EmailConfig
 from flash_earn_reminder.ui import (
+    AlertPopupController,
     MainWindow,
     can_minimize_to_tray,
     format_log_entry,
@@ -231,11 +234,15 @@ def test_dispatch_alert_starts_email_before_popup(monkeypatch) -> None:
         def start(self) -> None:
             events.append("thread_started")
 
-    def fake_popup(*args, **kwargs) -> None:
-        events.append("popup_shown")
+    class DummyPopupController:
+        def show(self, title: str, message: str) -> None:
+            events.append("popup_shown")
 
     monkeypatch.setattr("flash_earn_reminder.ui.threading.Thread", DummyThread)
-    monkeypatch.setattr("flash_earn_reminder.ui.QMessageBox.information", fake_popup)
+    monkeypatch.setattr(
+        "flash_earn_reminder.ui.QMessageBox.information",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("blocking popup must not be used")),
+    )
 
     fake_window = SimpleNamespace(
         config=AppConfig(
@@ -245,6 +252,7 @@ def test_dispatch_alert_starts_email_before_popup(monkeypatch) -> None:
             email_config=EmailConfig(enabled=True),
         ),
         tray_icon=SimpleNamespace(isVisible=lambda: False, showMessage=lambda *args, **kwargs: None),
+        _alert_popup_controller=DummyPopupController(),
         _append_log=lambda message: None,
         _send_email_safe=lambda subject, body: None,
     )
@@ -271,3 +279,24 @@ def test_dispatch_alert_starts_email_before_popup(monkeypatch) -> None:
     MainWindow._dispatch_alert(fake_window, alert)
 
     assert events == ["thread_created", "thread_started", "popup_shown"]
+
+
+def test_alert_popup_controller_reuses_one_non_modal_window() -> None:
+    app = QApplication.instance() or QApplication([])
+    controller = AlertPopupController(None)
+
+    first_dialog = controller.show("提醒一", "第一条消息")
+    second_dialog = controller.show("提醒二", "第二条消息")
+
+    assert second_dialog is first_dialog
+    assert second_dialog.isModal() is False
+    assert second_dialog.text() == "第二条消息"
+    assert second_dialog.informativeText() == "窗口未关闭期间累计 2 条提醒。"
+
+    second_dialog.close()
+    app.processEvents()
+    third_dialog = controller.show("提醒三", "第三条消息")
+
+    assert third_dialog is first_dialog
+    assert third_dialog.informativeText() == "窗口未关闭期间累计 1 条提醒。"
+    third_dialog.close()
