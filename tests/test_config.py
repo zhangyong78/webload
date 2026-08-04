@@ -133,3 +133,36 @@ def test_muted_campaigns_persist_in_local_state(tmp_path) -> None:
     state = load_app_state(state_path)
 
     assert state.muted_campaign_ids == ["AI"]
+
+
+def test_convertible_bond_slots_persist_in_local_state(tmp_path) -> None:
+    state_path = tmp_path / "app_state.json"
+    save_app_state(
+        state_path,
+        AppState(convertible_bond_alert_slots={"2026-08-06": [10, 14]}),
+    )
+
+    state = load_app_state(state_path)
+
+    assert state.convertible_bond_alert_slots == {"2026-08-06": [10, 14]}
+
+
+def test_old_state_defaults_convertible_bond_slots_to_empty(tmp_path) -> None:
+    state_path = tmp_path / "app_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    state = load_app_state(state_path)
+
+    assert state.convertible_bond_alert_slots == {}
+
+
+def test_load_app_state_normalizes_convertible_bond_slots(tmp_path) -> None:
+    state_path = tmp_path / "app_state.json"
+    state_path.write_text(
+        '{"convertible_bond_alert_slots":{"2026-08-06":[14,10,14,8,"bad"]}}',
+        encoding="utf-8",
+    )
+
+    state = load_app_state(state_path)
+
+    assert state.convertible_bond_alert_slots == {"2026-08-06": [10, 14]}

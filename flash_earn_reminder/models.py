@@ -45,6 +45,7 @@ class AppState:
     campaign_first_seen_times: dict[str, str] = field(default_factory=dict)
     campaign_expected_start_times: dict[str, str] = field(default_factory=dict)
     muted_campaign_ids: list[str] = field(default_factory=list)
+    convertible_bond_alert_slots: dict[str, list[int]] = field(default_factory=dict)
 
 
 @dataclass(slots=True, frozen=True)
@@ -75,6 +76,12 @@ class Campaign:
 class AlertEvent:
     campaign: Campaign
     reason: str
+    title: str
+    message: str
+
+
+@dataclass(slots=True, frozen=True)
+class NotificationEvent:
     title: str
     message: str
 

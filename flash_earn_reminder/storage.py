@@ -80,6 +80,9 @@ def load_app_state(path: Path | None = None) -> AppState:
         campaign_first_seen_times=dict(payload.get("campaign_first_seen_times", {})),
         campaign_expected_start_times=dict(payload.get("campaign_expected_start_times", {})),
         muted_campaign_ids=[str(item) for item in payload.get("muted_campaign_ids", [])],
+        convertible_bond_alert_slots=_load_convertible_bond_alert_slots(
+            payload.get("convertible_bond_alert_slots", {})
+        ),
     )
 
 
@@ -87,3 +90,23 @@ def save_app_state(path: Path | None, state: AppState) -> None:
     target = path or app_state_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(asdict(state), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _load_convertible_bond_alert_slots(value: object) -> dict[str, list[int]]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, list[int]] = {}
+    for raw_date, raw_slots in value.items():
+        if not isinstance(raw_slots, list):
+            continue
+        slots: set[int] = set()
+        for raw_slot in raw_slots:
+            try:
+                slot = int(raw_slot)
+            except (TypeError, ValueError):
+                continue
+            if slot in (10, 14):
+                slots.add(slot)
+        if slots:
+            normalized[str(raw_date)] = sorted(slots)
+    return normalized
