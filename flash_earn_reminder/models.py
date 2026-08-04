@@ -90,6 +90,8 @@ class NotificationEvent:
 class MonitorCycleResult:
     campaigns: list[Campaign] = field(default_factory=list)
     alerts: list[AlertEvent] = field(default_factory=list)
+    notifications: list[NotificationEvent] = field(default_factory=list)
     checked_at: datetime | None = None
     error: str = ""
+    convertible_bond_error: str = ""
     check_source: str = "自动"

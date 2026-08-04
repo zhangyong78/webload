@@ -404,6 +404,8 @@ class MainWindow(QMainWindow):
         else:
             self.running_label.setText("运行中" if self._running else "已暂停")
             self._append_log(f"检查完成（{result.check_source}），发现 {len(result.campaigns)} 个活动。")
+        if result.convertible_bond_error:
+            self._append_log(f"可转债检查失败（{result.check_source}）: {result.convertible_bond_error}")
         if not result.error and result.campaigns and not result.alerts:
             self._append_log(f"本次未触发提醒，规则判定时间 {_format_dt(result.checked_at)}。")
         self.last_check_label.setText(_format_dt(result.checked_at))
@@ -412,21 +414,37 @@ class MainWindow(QMainWindow):
         save_app_state(app_state_path(), self.state)
         for alert in result.alerts:
             self._dispatch_alert(alert)
+        for notification in result.notifications:
+            self._dispatch_notification(
+                notification.title,
+                notification.message,
+                notification.title,
+                notification.message,
+            )
         self._rearm_timer()
 
     def _dispatch_alert(self, alert: AlertEvent) -> None:
-        self._append_log(f"触发提醒: {alert.campaign.name} / {alert.reason}")
+        subject, body = build_alert_email(alert)
+        self._dispatch_notification(alert.title, alert.message, subject, body)
+
+    def _dispatch_notification(
+        self,
+        title: str,
+        message: str,
+        email_subject: str,
+        email_body: str,
+    ) -> None:
+        self._append_log(f"发送通知: {title}")
         if self.config.enable_system_notification and self.tray_icon.isVisible():
-            self.tray_icon.showMessage(alert.title, alert.message, QSystemTrayIcon.Information, 10000)
+            self.tray_icon.showMessage(title, message, QSystemTrayIcon.Information, 10000)
         if self.config.enable_email:
-            subject, body = build_alert_email(alert)
             threading.Thread(
                 target=self._send_email_safe,
-                args=(subject, body),
+                args=(email_subject, email_body),
                 daemon=True,
             ).start()
         if self.config.enable_window_popup:
-            self._alert_popup_controller.show(alert.title, alert.message)
+            self._alert_popup_controller.show(title, message)
 
     def _send_email_safe(self, subject: str, body: str) -> None:
         try:
@@ -696,7 +714,10 @@ def next_monitor_run_time(
     campaigns: list[Campaign],
     config: AppConfig,
 ) -> datetime:
-    candidates = [next_scheduled_run_time(current, daily_hours)]
+    candidates = [
+        next_scheduled_run_time(current, daily_hours),
+        next_scheduled_run_time(current, (10, 14)),
+    ]
     for campaign in campaigns:
         if campaign.countdown_seconds is None:
             continue

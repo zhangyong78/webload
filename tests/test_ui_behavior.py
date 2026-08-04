@@ -150,16 +150,24 @@ def test_timer_interval_rounds_up_to_avoid_early_timeout() -> None:
     assert timer_interval_ms(current, target) == 1501
 
 
-def test_next_monitor_run_time_falls_back_to_daily_slot_when_no_special_event() -> None:
+def test_next_monitor_run_time_includes_ten_o_clock_convertible_bond_slot() -> None:
     current = datetime(2026, 7, 7, 9, 0, 0)
 
     result = next_monitor_run_time(current, current, (8, 20), [], AppConfig())
 
-    assert result == datetime(2026, 7, 7, 20, 0, 0)
+    assert result == datetime(2026, 7, 7, 10, 0, 0)
+
+
+def test_next_monitor_run_time_includes_fourteen_o_clock_convertible_bond_slot() -> None:
+    current = datetime(2026, 7, 7, 10, 30, 0)
+
+    result = next_monitor_run_time(current, current, (8, 20), [], AppConfig())
+
+    assert result == datetime(2026, 7, 7, 14, 0, 0)
 
 
 def test_next_monitor_run_time_checks_daily_14_for_new_upcoming_campaigns() -> None:
-    current = datetime(2026, 7, 7, 9, 0, 0)
+    current = datetime(2026, 7, 7, 10, 30, 0)
     campaign = Campaign(
         campaign_id="AI",
         name="AI",
@@ -221,7 +229,7 @@ def test_next_monitor_run_time_checks_when_upcoming_campaign_starts_to_schedule_
     assert result == datetime(2026, 7, 7, 9, 30, 0)
 
 
-def test_dispatch_alert_starts_email_before_popup(monkeypatch) -> None:
+def test_dispatch_notification_starts_email_before_popup(monkeypatch) -> None:
     events: list[str] = []
 
     class DummyThread:
@@ -256,6 +264,24 @@ def test_dispatch_alert_starts_email_before_popup(monkeypatch) -> None:
         _append_log=lambda message: None,
         _send_email_safe=lambda subject, body: None,
     )
+    MainWindow._dispatch_notification(
+        fake_window,
+        "A 股可转债申购提醒",
+        "提醒正文",
+        "A 股可转债申购提醒",
+        "邮件正文",
+    )
+
+    assert events == ["thread_created", "thread_started", "popup_shown"]
+
+
+def test_dispatch_alert_adapts_okx_email_to_generic_notification() -> None:
+    captured: list[tuple[str, str, str, str]] = []
+    fake_window = SimpleNamespace(
+        _dispatch_notification=lambda title, message, email_subject, email_body: captured.append(
+            (title, message, email_subject, email_body)
+        )
+    )
     alert = AlertEvent(
         campaign=Campaign(
             campaign_id="AI",
@@ -268,17 +294,18 @@ def test_dispatch_alert_starts_email_before_popup(monkeypatch) -> None:
             countdown_seconds=3600,
             is_ongoing=False,
             is_upcoming=True,
-            source_url="https://www.okx.com/zh-hans/flash-earn/stake-to-earn?from-page=trade",
-            supported_assets=("BTC", "OKSOL", "OKB", "AI"),
+            source_url="https://www.okx.com/zh-hans/flash-earn/stake-to-earn",
         ),
         reason="starts_within_1h",
-        title="okx 闪赚活动提醒",
-        message="unused",
+        title="OKX 提醒",
+        message="活动即将开始",
     )
 
     MainWindow._dispatch_alert(fake_window, alert)
 
-    assert events == ["thread_created", "thread_started", "popup_shown"]
+    assert captured[0][0:2] == ("OKX 提醒", "活动即将开始")
+    assert captured[0][2] == "okx 闪赚活动提醒"
+    assert "项目：AI" in captured[0][3]
 
 
 def test_alert_popup_controller_reuses_one_non_modal_window() -> None:
