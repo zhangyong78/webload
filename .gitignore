@@ -7,3 +7,5 @@ dist/
 data/
 
 *.spec
+
+.worktrees/
