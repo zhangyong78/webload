@@ -9,6 +9,7 @@ from flash_earn_reminder.ui import (
     AlertPopupController,
     MainWindow,
     can_minimize_to_tray,
+    convertible_bond_check_log,
     format_log_entry,
     merge_default_recipients,
     next_monitor_run_time,
@@ -141,6 +142,17 @@ def test_format_log_entry_includes_date_and_check_source() -> None:
     result = format_log_entry(datetime(2026, 7, 17, 9, 0, 0), "检查完成（自动）")
 
     assert result == "[2026-07-17 09:00:00] 检查完成（自动）"
+
+
+def test_convertible_bond_check_log_explicitly_reports_no_subscriptions() -> None:
+    result = SimpleNamespace(
+        check_source="启动",
+        convertible_bond_error="",
+        convertible_bond_subscription_count=0,
+        notifications=[],
+    )
+
+    assert convertible_bond_check_log(result) == "可转债检查完成（启动）：今日无可申购转债。"
 
 
 def test_timer_interval_rounds_up_to_avoid_early_timeout() -> None:

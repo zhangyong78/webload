@@ -58,5 +58,6 @@ def run_monitor_cycle(
         checked_at=current_time,
         error=error,
         convertible_bond_error=convertible_bond_error,
+        convertible_bond_subscription_count=len(subscriptions),
         check_source=check_source,
     )

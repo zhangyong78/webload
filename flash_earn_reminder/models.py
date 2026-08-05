@@ -94,4 +94,5 @@ class MonitorCycleResult:
     checked_at: datetime | None = None
     error: str = ""
     convertible_bond_error: str = ""
+    convertible_bond_subscription_count: int = 0
     check_source: str = "自动"

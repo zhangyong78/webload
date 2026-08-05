@@ -404,8 +404,7 @@ class MainWindow(QMainWindow):
         else:
             self.running_label.setText("运行中" if self._running else "已暂停")
             self._append_log(f"检查完成（{result.check_source}），发现 {len(result.campaigns)} 个活动。")
-        if result.convertible_bond_error:
-            self._append_log(f"可转债检查失败（{result.check_source}）: {result.convertible_bond_error}")
+        self._append_log(convertible_bond_check_log(result))
         if not result.error and result.campaigns and not result.alerts:
             self._append_log(f"本次未触发提醒，规则判定时间 {_format_dt(result.checked_at)}。")
         self.last_check_label.setText(_format_dt(result.checked_at))
@@ -664,6 +663,17 @@ def _format_dt(value: datetime | None) -> str:
 
 def format_log_entry(timestamp: datetime, message: str) -> str:
     return f"[{_format_dt(timestamp)}] {message}"
+
+
+def convertible_bond_check_log(result: object) -> str:
+    source = str(getattr(result, "check_source", "自动"))
+    error = str(getattr(result, "convertible_bond_error", "")).strip()
+    if error:
+        return f"可转债检查失败（{source}）: {error}"
+    count = max(0, int(getattr(result, "convertible_bond_subscription_count", 0)))
+    if count == 0:
+        return f"可转债检查完成（{source}）：今日无可申购转债。"
+    return f"可转债检查完成（{source}）：今日有 {count} 只可申购转债。"
 
 
 def timer_interval_ms(current: datetime, target: datetime) -> int:
