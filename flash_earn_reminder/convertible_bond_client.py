@@ -37,8 +37,14 @@ def parse_convertible_bond_payload(
     payload: object,
     subscription_date: date,
 ) -> list[ConvertibleBondSubscription]:
-    if not isinstance(payload, Mapping) or payload.get("success") is not True:
-        raise ValueError("可转债接口返回失败。")
+    if not isinstance(payload, Mapping):
+        raise ValueError("可转债接口返回失败：响应不是对象。")
+    if payload.get("success") is not True:
+        if str(payload.get("code", "")) == "9201":
+            return []
+        code = _clean_text(payload.get("code")) or "未知"
+        message = _clean_text(payload.get("message")) or "未知错误"
+        raise ValueError(f"可转债接口返回失败（code={code}）：{message}")
     result = payload.get("result")
     if not isinstance(result, Mapping) or not isinstance(result.get("data"), list):
         raise ValueError("可转债接口数据结构异常。")

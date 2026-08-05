@@ -66,6 +66,31 @@ def test_parse_convertible_bond_payload_rejects_invalid_envelopes(payload: objec
         parse_convertible_bond_payload(payload, date(2026, 8, 6))
 
 
+def test_parse_convertible_bond_payload_treats_eastmoney_empty_report_as_no_subscriptions() -> None:
+    payload = {
+        "success": False,
+        "code": 9201,
+        "message": "返回数据为空",
+        "result": None,
+    }
+
+    result = parse_convertible_bond_payload(payload, date(2026, 8, 5))
+
+    assert result == []
+
+
+def test_parse_convertible_bond_payload_preserves_failure_details() -> None:
+    payload = {
+        "success": False,
+        "code": 500,
+        "message": "服务暂不可用",
+        "result": None,
+    }
+
+    with pytest.raises(ValueError, match="500.*服务暂不可用"):
+        parse_convertible_bond_payload(payload, date(2026, 8, 5))
+
+
 def test_parse_convertible_bond_payload_sorts_by_bond_code() -> None:
     payload = {
         "success": True,
