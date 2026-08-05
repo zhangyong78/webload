@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 
 
 @dataclass(slots=True)
@@ -45,6 +45,15 @@ class AppState:
     campaign_first_seen_times: dict[str, str] = field(default_factory=dict)
     campaign_expected_start_times: dict[str, str] = field(default_factory=dict)
     muted_campaign_ids: list[str] = field(default_factory=list)
+    convertible_bond_alert_slots: dict[str, list[int]] = field(default_factory=dict)
+
+
+@dataclass(slots=True, frozen=True)
+class ConvertibleBondSubscription:
+    name: str
+    bond_code: str
+    subscription_code: str
+    subscription_date: date
 
 
 @dataclass(slots=True)
@@ -71,10 +80,18 @@ class AlertEvent:
     message: str
 
 
+@dataclass(slots=True, frozen=True)
+class NotificationEvent:
+    title: str
+    message: str
+
+
 @dataclass(slots=True)
 class MonitorCycleResult:
     campaigns: list[Campaign] = field(default_factory=list)
     alerts: list[AlertEvent] = field(default_factory=list)
+    notifications: list[NotificationEvent] = field(default_factory=list)
     checked_at: datetime | None = None
     error: str = ""
+    convertible_bond_error: str = ""
     check_source: str = "自动"
