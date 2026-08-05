@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSystemTrayIcon,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -73,6 +74,34 @@ class AlertPopupController:
 
 def merge_default_recipients(recipients: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys((*EmailConfig().recipient_emails, *recipients)))
+
+
+class CollapsibleSection(QWidget):
+    def __init__(self, title: str, *, expanded: bool = False) -> None:
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        self.toggle_button = QToolButton()
+        self.toggle_button.setObjectName("sectionToggle")
+        self.toggle_button.setText(title)
+        self.toggle_button.setCheckable(True)
+        self.toggle_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+
+        self.content = QWidget()
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+
+        layout.addWidget(self.toggle_button)
+        layout.addWidget(self.content)
+        self.toggle_button.toggled.connect(self.set_expanded)
+        self.toggle_button.setChecked(expanded)
+        self.set_expanded(expanded)
+
+    def set_expanded(self, expanded: bool) -> None:
+        self.toggle_button.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self.content.setVisible(expanded)
 
 
 class CampaignCard(QFrame):
@@ -254,10 +283,11 @@ class MainWindow(QMainWindow):
         form.addRow("", self.tray_checkbox)
         return group
 
-    def _build_mail_group(self) -> QGroupBox:
-        group = QGroupBox("邮件配置")
-        form = QFormLayout(group)
-        self.qqokx_path_edit = QLineEdit()
+    def _build_mail_group(self) -> CollapsibleSection:
+        section = CollapsibleSection("邮件配置")
+        self.mail_config_toggle = section.toggle_button
+        self.mail_config_content = section.content
+        form = QFormLayout()
         self.smtp_host_edit = QLineEdit()
         self.smtp_port_spin = QSpinBox()
         self.smtp_port_spin.setRange(1, 65535)
@@ -267,7 +297,6 @@ class MainWindow(QMainWindow):
         self.sender_email_edit = QLineEdit()
         self.recipients_edit = QLineEdit()
         self.ssl_checkbox = QCheckBox("使用 SSL")
-        form.addRow("qqokx 项目路径", self.qqokx_path_edit)
         form.addRow("SMTP Host", self.smtp_host_edit)
         form.addRow("SMTP Port", self.smtp_port_spin)
         form.addRow("SMTP 用户名", self.smtp_username_edit)
@@ -275,13 +304,15 @@ class MainWindow(QMainWindow):
         form.addRow("发件邮箱", self.sender_email_edit)
         form.addRow("收件邮箱", self.recipients_edit)
         form.addRow("", self.ssl_checkbox)
-        return group
+        section.content_layout.addLayout(form)
+        return section
 
     def _build_log_group(self) -> QGroupBox:
         group = QGroupBox("运行日志")
         layout = QVBoxLayout(group)
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
+        self.log_output.setMinimumHeight(220)
         layout.addWidget(self.log_output)
         return group
 
@@ -297,7 +328,6 @@ class MainWindow(QMainWindow):
         self.window_popup_checkbox.setChecked(self.config.enable_window_popup)
         self.email_checkbox.setChecked(self.config.enable_email)
         self.tray_checkbox.setChecked(self.config.minimize_to_tray)
-        self.qqokx_path_edit.setText(self.config.qqokx_project_path)
         self.smtp_host_edit.setText(self.config.email_config.smtp_host)
         self.smtp_port_spin.setValue(self.config.email_config.smtp_port or 465)
         self.smtp_username_edit.setText(self.config.email_config.smtp_username)
@@ -323,7 +353,6 @@ class MainWindow(QMainWindow):
         self.config.enable_window_popup = self.window_popup_checkbox.isChecked()
         self.config.enable_email = self.email_checkbox.isChecked()
         self.config.minimize_to_tray = self.tray_checkbox.isChecked()
-        self.config.qqokx_project_path = self.qqokx_path_edit.text().strip() or r"D:\qqokx"
         self.config.email_config.enabled = self.email_checkbox.isChecked()
         self.config.email_config.smtp_host = self.smtp_host_edit.text().strip()
         self.config.email_config.smtp_port = self.smtp_port_spin.value()
@@ -342,7 +371,8 @@ class MainWindow(QMainWindow):
     def import_mail_config(self) -> None:
         self._apply_form_to_config()
         try:
-            imported = import_qqokx_email_config(self.qqokx_path_edit.text().strip())
+            project_path = self.config.qqokx_project_path.strip() or r"D:\qqokx"
+            imported = import_qqokx_email_config(project_path)
         except Exception as exc:
             QMessageBox.critical(self, "导入失败", str(exc))
             return
@@ -371,6 +401,8 @@ class MainWindow(QMainWindow):
     def check_now(self, source: str = "手动") -> None:
         if not self._running or self._refreshing:
             return
+        if source == "手动":
+            self._append_log("开始检查（手动）：正在检查 OKX 活动和 A 股可转债申购。")
         self._refreshing = True
         self.running_label.setText("检查中")
         thread = threading.Thread(target=self._run_cycle_worker, args=(source,), daemon=True)
@@ -618,6 +650,16 @@ class MainWindow(QMainWindow):
                 font-weight: 600;
             }
             QPushButton:hover { background: #388bfd; }
+            QToolButton#sectionToggle {
+                background: #171923;
+                border: 1px solid #262a33;
+                border-radius: 10px;
+                padding: 9px 12px;
+                color: #f3f4f6;
+                font-weight: 600;
+                text-align: left;
+            }
+            QToolButton#sectionToggle:hover { border-color: #388bfd; }
             QCheckBox { spacing: 8px; }
             QFrame#campaignCard {
                 background: #171923;

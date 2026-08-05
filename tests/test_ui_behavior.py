@@ -1,7 +1,7 @@
 from datetime import datetime
 from types import SimpleNamespace
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from flash_earn_reminder.models import AppConfig, Campaign
 from flash_earn_reminder.models import AlertEvent, EmailConfig
@@ -153,6 +153,52 @@ def test_convertible_bond_check_log_explicitly_reports_no_subscriptions() -> Non
     )
 
     assert convertible_bond_check_log(result) == "可转债检查完成（启动）：今日无可申购转债。"
+
+
+def test_mail_settings_start_collapsed_without_qqokx_path_and_log_has_room() -> None:
+    app = QApplication.instance() or QApplication([])
+    fake_window = SimpleNamespace()
+
+    mail_section = MainWindow._build_mail_group(fake_window)
+    log_group = MainWindow._build_log_group(fake_window)
+
+    assert fake_window.mail_config_content.isHidden() is True
+    assert all(label.text() != "qqokx 项目路径" for label in mail_section.findChildren(QLabel))
+    assert fake_window.log_output.minimumHeight() >= 220
+
+    fake_window.mail_config_toggle.click()
+    assert fake_window.mail_config_content.isHidden() is False
+    mail_section.deleteLater()
+    log_group.deleteLater()
+    app.processEvents()
+
+
+def test_manual_check_logs_okx_and_convertible_bond_before_worker_starts(monkeypatch) -> None:
+    events: list[tuple[str, str]] = []
+
+    class DummyThread:
+        def __init__(self, *, target, args, daemon):
+            self.target = target
+            self.args = args
+
+        def start(self) -> None:
+            events.append(("thread", "started"))
+
+    fake_window = SimpleNamespace(
+        _running=True,
+        _refreshing=False,
+        running_label=SimpleNamespace(setText=lambda text: None),
+        _append_log=lambda message: events.append(("log", message)),
+        _run_cycle_worker=lambda source: None,
+    )
+    monkeypatch.setattr("flash_earn_reminder.ui.threading.Thread", DummyThread)
+
+    MainWindow.check_now(fake_window, "手动")
+
+    assert events == [
+        ("log", "开始检查（手动）：正在检查 OKX 活动和 A 股可转债申购。"),
+        ("thread", "started"),
+    ]
 
 
 def test_timer_interval_rounds_up_to_avoid_early_timeout() -> None:
