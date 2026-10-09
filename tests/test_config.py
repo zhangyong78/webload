@@ -26,7 +26,6 @@ def test_email_config_from_snapshot_parses_recipients() -> None:
 def test_default_email_config_includes_requested_recipients() -> None:
     assert EmailConfig().recipient_emails == (
         "conystar@126.com",
-        "187377363220@163.com",
         "1057902445@qq.com",
         "xhbyssy@163.com",
     )

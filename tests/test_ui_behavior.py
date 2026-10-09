@@ -30,7 +30,6 @@ def test_merge_default_recipients_keeps_imported_addresses() -> None:
 
     assert recipients == (
         "conystar@126.com",
-        "187377363220@163.com",
         "1057902445@qq.com",
         "xhbyssy@163.com",
         "legacy@example.com",
