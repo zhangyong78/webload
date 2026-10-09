@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin, urlparse
 
@@ -14,6 +16,9 @@ from flash_earn_reminder.models import Campaign
 
 DEFAULT_URL = "https://www.okx.com/zh-hans/flash-earn/stake-to-earn?from-page=trade"
 ANNOUNCEMENTS_URL = "https://www.okx.com/zh-hans/help/section/announcements-latest-announcements"
+SITEMAP_INDEX_URL = "https://www.okx.com/help-center-index.xml"
+SITEMAP_MAX_CAMPAIGNS = 10
+SITEMAP_CAMPAIGN_MAX_AGE_DAYS = 45
 ANNOUNCEMENT_SECTION_URLS = (
     "https://www.okx.com/zh-hans/help/section/latest-events",
     "https://www.okx.com/help/section/latest-events",
@@ -90,6 +95,102 @@ def _has_region_restriction_notice(html: str) -> bool:
 
 
 def fetch_public_flash_earn_announcements(*, timeout: int = 20) -> list[Campaign]:
+    try:
+        return _fetch_flash_earn_announcements_from_sitemap(timeout=timeout)
+    except Exception as sitemap_error:
+        try:
+            return _fetch_flash_earn_announcements_from_sections(timeout=timeout)
+        except Exception as section_error:
+            raise RuntimeError(
+                f"官方闪赚活动数据源均无法读取（sitemap: {sitemap_error}；公告列表: {section_error}）"
+            ) from section_error
+
+
+def _fetch_flash_earn_announcements_from_sitemap(*, timeout: int) -> list[Campaign]:
+    index_response = requests.get(SITEMAP_INDEX_URL, headers=REQUEST_HEADERS, timeout=timeout)
+    index_response.raise_for_status()
+    sitemap_namespace = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
+    index_root = ET.fromstring(index_response.content)
+    sitemap_urls = []
+    for sitemap in index_root.findall(f"{sitemap_namespace}sitemap"):
+        loc = (sitemap.findtext(f"{sitemap_namespace}loc") or "").strip()
+        parsed = urlparse(loc)
+        if parsed.hostname == "www.okx.com" and re.fullmatch(r"/help-center\d+\.xml", parsed.path):
+            sitemap_urls.append(loc)
+    if not sitemap_urls:
+        raise RuntimeError("官方 sitemap index 中未找到帮助中心目录")
+
+    candidates: dict[str, tuple[str, str]] = {}
+    for sitemap_url in sitemap_urls:
+        response = requests.get(sitemap_url, headers=REQUEST_HEADERS, timeout=timeout)
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+        for entry in root.findall(f"{sitemap_namespace}url"):
+            loc = (entry.findtext(f"{sitemap_namespace}loc") or "").strip()
+            parsed = urlparse(loc)
+            slug = parsed.path.rsplit("/help/", 1)[-1]
+            if parsed.hostname != "www.okx.com" or "/help/" not in parsed.path or "flash-earn" not in slug.casefold():
+                continue
+            if any(token in slug.casefold() for token in (
+                "flash-earn-faq", "flash-earn-terms", "flash-earn-product-updates",
+                "flash-earn-just-got-bigger", "flash-earn-trade-to-earn",
+            )):
+                continue
+            lastmod = (entry.findtext(f"{sitemap_namespace}lastmod") or "").strip()
+            key = slug.casefold()
+            previous = candidates.get(key)
+            if previous is None or lastmod > previous[0]:
+                candidates[key] = (lastmod, loc)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=SITEMAP_CAMPAIGN_MAX_AGE_DAYS)
+    recent = []
+    for lastmod, loc in candidates.values():
+        try:
+            updated_at = datetime.fromisoformat(lastmod.replace("Z", "+00:00"))
+        except ValueError:
+            updated_at = cutoff
+        if updated_at >= cutoff:
+            recent.append((lastmod, loc))
+    latest = sorted(recent, key=lambda item: item[0], reverse=True)[:SITEMAP_MAX_CAMPAIGNS]
+    if not latest:
+        raise RuntimeError("官方 sitemap 中未找到闪赚活动公告链接")
+
+    def fetch_candidate(english_url: str) -> tuple[Campaign | None, bool, list[str]]:
+        slug = urlparse(english_url).path.rsplit("/help/", 1)[-1]
+        # Sitemap entries are canonical English pages; use them first so HK
+        # deployments do not spend a second request on every campaign.
+        article_urls = (english_url, f"https://www.okx.com/zh-hans/help/{slug}")
+        errors: list[str] = []
+        readable = False
+        for article_url in article_urls:
+            try:
+                article_response = requests.get(article_url, headers=REQUEST_HEADERS, timeout=timeout)
+                article_response.raise_for_status()
+            except Exception as exc:
+                errors.append(f"{article_url}: {exc}")
+                continue
+            if _has_region_restriction_notice(article_response.text):
+                errors.append(f"{article_url}: 页面限制访问")
+                continue
+            readable = True
+            campaign = _campaign_from_public_announcement(article_response.text, article_response.url)
+            if campaign is not None:
+                return campaign, readable, errors
+        return None, readable, errors
+
+    # A few recent announcements can be expired or unrelated product updates.
+    # Fetch them concurrently so a slow regional route does not delay checks.
+    with ThreadPoolExecutor(max_workers=min(5, len(latest))) as executor:
+        results = list(executor.map(fetch_candidate, (url for _, url in latest)))
+    campaigns = [campaign for campaign, _, _ in results if campaign is not None]
+    readable_articles = sum(readable for _, readable, _ in results)
+    source_errors = [error for _, _, errors in results for error in errors]
+    if not readable_articles:
+        raise RuntimeError("sitemap 中的闪赚公告链接均读取失败：" + "; ".join(source_errors))
+    return campaigns
+
+
+def _fetch_flash_earn_announcements_from_sections(*, timeout: int) -> list[Campaign]:
     article_urls: dict[str, list[str]] = {}
     source_errors: list[str] = []
     readable_sources = 0

@@ -1,5 +1,6 @@
 from flash_earn_reminder.emailing import build_alert_email, build_simulated_ongoing_email, email_config_from_snapshot, send_email_alert
 from flash_earn_reminder.models import AlertEvent, AppState, Campaign, EmailConfig
+from flash_earn_reminder import storage
 from flash_earn_reminder.storage import load_app_config, load_app_state, save_app_state
 
 
@@ -165,3 +166,41 @@ def test_load_app_state_normalizes_convertible_bond_slots(tmp_path) -> None:
     state = load_app_state(state_path)
 
     assert state.convertible_bond_alert_slots == {"2026-08-06": [10, 14]}
+
+
+def test_frozen_app_migrates_mail_config_from_previous_version_folder(tmp_path, monkeypatch) -> None:
+    previous_root = tmp_path / "OKXFlashEarnReminder_v0.1.4"
+    current_root = tmp_path / "OKXFlashEarnReminder_v0.1.5"
+    local_app_data = tmp_path / "LocalAppData"
+    previous_data = previous_root / "data"
+    previous_data.mkdir(parents=True)
+    (previous_data / "app_config.json").write_text(
+        '{"email_config":{"smtp_host":"smtp.example.com","smtp_username":"user@example.com",'
+        '"smtp_password":"secret","sender_email":"user@example.com","recipient_emails":["a@example.com"]}}',
+        encoding="utf-8",
+    )
+    (previous_data / "app_state.json").write_text('{"muted_campaign_ids":["ABC"]}', encoding="utf-8")
+    monkeypatch.setattr(storage.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(storage, "runtime_root", lambda: current_root)
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+
+    config = load_app_config()
+    state = load_app_state()
+
+    assert config.email_config.smtp_host == "smtp.example.com"
+    assert config.email_config.smtp_password == "secret"
+    assert state.muted_campaign_ids == ["ABC"]
+    assert storage.app_config_path().parent == local_app_data / "OKXFlashEarnReminder"
+
+
+def test_frozen_app_keeps_config_location_across_version_folder_changes(tmp_path, monkeypatch) -> None:
+    local_app_data = tmp_path / "LocalAppData"
+    current_root = tmp_path / "OKXFlashEarnReminder_v0.1.5"
+    monkeypatch.setattr(storage.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(storage, "runtime_root", lambda: current_root)
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+
+    first_path = storage.app_config_path()
+    monkeypatch.setattr(storage, "runtime_root", lambda: tmp_path / "OKXFlashEarnReminder_v0.1.6")
+
+    assert storage.app_config_path() == first_path

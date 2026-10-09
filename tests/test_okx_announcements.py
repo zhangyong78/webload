@@ -30,6 +30,10 @@ class FakeResponse:
         self.url = url
         self.text = text
 
+    @property
+    def content(self) -> bytes:
+        return self.text.encode("utf-8")
+
     def raise_for_status(self) -> None:
         return None
 
@@ -56,6 +60,61 @@ def test_public_announcements_use_english_events_when_chinese_list_is_empty(monk
     assert campaigns[0].supported_assets == ("BTC", "XRP")
     assert campaigns[0].is_upcoming
     assert requested.count(article_url) == 1
+
+
+def test_public_announcements_use_official_sitemap_as_structured_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    article_url = "https://www.okx.com/help/okx-flash-earn-lite-abc-is-now-live"
+    index_xml = """<?xml version="1.0" encoding="UTF-8"?>
+    <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <sitemap><loc>https://www.okx.com/help-center001.xml</loc></sitemap>
+      <sitemap><loc>https://evil.example/help-center001.xml</loc></sitemap>
+    </sitemapindex>"""
+    sitemap_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url><loc>{article_url}</loc><lastmod>2099-01-01T00:00:00Z</lastmod></url>
+      <url><loc>https://www.okx.com/help/flash-earn-faq</loc><lastmod>2099-01-01T00:00:00Z</lastmod></url>
+      <url><loc>https://www.okx.com/help/another-coin-campaign</loc><lastmod>2099-01-01T00:00:00Z</lastmod></url>
+    </urlset>"""
+    requested: list[str] = []
+
+    class XmlResponse(FakeResponse):
+        @property
+        def content(self) -> bytes:
+            return self.text.encode("utf-8")
+
+    def fake_get(url: str, **kwargs: object) -> FakeResponse:
+        requested.append(url)
+        if url == okx_client.SITEMAP_INDEX_URL:
+            return XmlResponse(url, index_xml)
+        if url == "https://www.okx.com/help-center001.xml":
+            return XmlResponse(url, sitemap_xml)
+        if url == article_url:
+            return FakeResponse(url, ENGLISH_ARTICLE)
+        raise AssertionError(f"Unexpected request: {url}")
+
+    monkeypatch.setattr(okx_client.requests, "get", fake_get)
+
+    campaigns = okx_client.fetch_public_flash_earn_announcements()
+
+    assert [campaign.name for campaign in campaigns] == ["ABC"]
+    assert requested == [okx_client.SITEMAP_INDEX_URL, "https://www.okx.com/help-center001.xml", article_url]
+
+
+def test_sitemap_source_rejects_old_campaigns(monkeypatch: pytest.MonkeyPatch) -> None:
+    index_xml = """<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <sitemap><loc>https://www.okx.com/help-center001.xml</loc></sitemap>
+    </sitemapindex>"""
+    sitemap_xml = """<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url><loc>https://www.okx.com/help/flash-earn-lite-old</loc><lastmod>2020-01-01T00:00:00Z</lastmod></url>
+    </urlset>"""
+
+    def fake_get(url: str, **kwargs: object) -> FakeResponse:
+        return FakeResponse(url, index_xml if url == okx_client.SITEMAP_INDEX_URL else sitemap_xml)
+
+    monkeypatch.setattr(okx_client.requests, "get", fake_get)
+
+    with pytest.raises(RuntimeError, match="sitemap 中未找到闪赚活动公告链接"):
+        okx_client._fetch_flash_earn_announcements_from_sitemap(timeout=1)
 
 
 def test_public_announcements_continue_when_one_section_fails(monkeypatch: pytest.MonkeyPatch) -> None:

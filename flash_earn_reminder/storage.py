@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -15,9 +17,63 @@ def runtime_root() -> Path:
 
 
 def data_dir() -> Path:
-    target = runtime_root() / "data"
+    if not getattr(sys, "frozen", False):
+        target = runtime_root() / "data"
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        target = Path(local_app_data) / "OKXFlashEarnReminder"
+        _migrate_legacy_data(target)
+    else:
+        target = runtime_root() / "data"
     target.mkdir(parents=True, exist_ok=True)
     return target
+
+
+def _migrate_legacy_data(target: Path) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    legacy_dirs = [runtime_root() / "data"]
+    try:
+        legacy_dirs.extend(
+            child / "data"
+            for child in runtime_root().parent.iterdir()
+            if child.is_dir()
+            and child != runtime_root()
+            and child.name.casefold().startswith("okxflashearnreminder")
+        )
+    except OSError:
+        pass
+
+    for filename in ("app_config.json", "app_state.json"):
+        destination = target / filename
+        if destination.exists():
+            continue
+        candidates = [path / filename for path in legacy_dirs if (path / filename).is_file()]
+        if not candidates:
+            continue
+        if filename == "app_config.json":
+            candidates.sort(key=_legacy_config_score, reverse=True)
+        else:
+            candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        try:
+            shutil.copy2(candidates[0], destination)
+        except OSError:
+            continue
+
+
+def _legacy_config_score(path: Path) -> tuple[int, float]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        email_config = payload.get("email_config", {})
+        configured = bool(
+            email_config.get("smtp_host")
+            and (email_config.get("smtp_username") or email_config.get("sender_email"))
+        )
+        return int(configured), path.stat().st_mtime
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return 0, 0.0
 
 
 def app_config_path() -> Path:
