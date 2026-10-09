@@ -49,15 +49,19 @@ def fetch_campaigns(url: str = DEFAULT_URL) -> list[Campaign]:
     campaigns = parse_campaigns(html)
     if campaigns:
         return campaigns
-    if _has_region_restriction_notice(html):
-        try:
-            announcement_campaigns = fetch_public_flash_earn_announcements()
-        except Exception as exc:
-            raise RuntimeError(
-                f"OKX 产品页受地区限制，且官方活动公告暂时无法读取：{exc}"
-            ) from exc
-        if announcement_campaigns:
-            return announcement_campaigns
+
+    # Some regions return a successful but empty product-page shell without
+    # showing an explicit restriction notice. Always fall back to public
+    # announcements when the page parser finds no campaigns.
+    region_restricted = _has_region_restriction_notice(html)
+    try:
+        announcement_campaigns = fetch_public_flash_earn_announcements()
+    except Exception as exc:
+        reason = "产品页可能受地区限制" if region_restricted else "产品页未解析到活动"
+        raise RuntimeError(f"OKX {reason}，且官方活动公告暂时无法读取：{exc}") from exc
+    if announcement_campaigns:
+        return announcement_campaigns
+    if region_restricted:
         raise RuntimeError("OKX 产品页受地区限制，官方公告中暂未找到有效期内的闪赚活动。")
     return campaigns
 
