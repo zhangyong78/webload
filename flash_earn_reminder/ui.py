@@ -436,7 +436,13 @@ class MainWindow(QMainWindow):
             self._append_log(f"页面返回空活动（{result.check_source}），沿用上一轮 {len(result.campaigns)} 个活动。")
         else:
             self.running_label.setText("运行中" if self._running else "已暂停")
-            self._append_log(f"检查完成（{result.check_source}），发现 {len(result.campaigns)} 个活动。")
+            if not result.campaigns:
+                self._append_log(f"检查完成（{result.check_source}）：产品页和公开公告均未发现有效期内的闪赚活动。")
+            else:
+                from_announcements = any("/help/" in campaign.source_url for campaign in result.campaigns)
+                from_product = any("/help/" not in campaign.source_url for campaign in result.campaigns)
+                source = "产品页 + 官方公告" if from_announcements and from_product else "官方公告" if from_announcements else "产品页"
+                self._append_log(f"检查完成（{result.check_source}，{source}），发现 {len(result.campaigns)} 个活动。")
         self._append_log(convertible_bond_check_log(result))
         if not result.error and result.campaigns and not result.alerts:
             self._append_log(f"本次未触发提醒，规则判定时间 {_format_dt(result.checked_at)}。")

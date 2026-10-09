@@ -4,7 +4,7 @@ import json
 import hashlib
 import re
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -14,6 +14,11 @@ from flash_earn_reminder.models import Campaign
 
 DEFAULT_URL = "https://www.okx.com/zh-hans/flash-earn/stake-to-earn?from-page=trade"
 ANNOUNCEMENTS_URL = "https://www.okx.com/zh-hans/help/section/announcements-latest-announcements"
+ANNOUNCEMENT_SECTION_URLS = (
+    "https://www.okx.com/zh-hans/help/section/latest-events",
+    "https://www.okx.com/help/section/latest-events",
+    ANNOUNCEMENTS_URL,
+)
 REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -45,22 +50,35 @@ def fetch_page(url: str = DEFAULT_URL, *, timeout: int = 20) -> str:
 
 
 def fetch_campaigns(url: str = DEFAULT_URL) -> list[Campaign]:
-    html = fetch_page(url)
-    campaigns = parse_campaigns(html)
-    if campaigns:
-        return campaigns
+    page_error: Exception | None = None
+    try:
+        html = fetch_page(url)
+    except Exception as exc:
+        page_error = exc
+        html = ""
+    campaigns = parse_campaigns(html) if html else []
 
-    # Some regions return a successful but empty product-page shell without
-    # showing an explicit restriction notice. Always fall back to public
-    # announcements when the page parser finds no campaigns.
-    region_restricted = _has_region_restriction_notice(html)
+    # The anonymous product page can be empty or only show part of the public
+    # campaigns in some regions. Always check announcements as well.
+    region_restricted = _has_region_restriction_notice(html) if html else False
     try:
         announcement_campaigns = fetch_public_flash_earn_announcements()
     except Exception as exc:
-        reason = "产品页可能受地区限制" if region_restricted else "产品页未解析到活动"
+        if campaigns:
+            return campaigns
+        reason = (
+            f"产品页读取失败（{page_error}）" if page_error else
+            "产品页可能受地区限制" if region_restricted else "产品页未解析到活动"
+        )
         raise RuntimeError(f"OKX {reason}，且官方活动公告暂时无法读取：{exc}") from exc
-    if announcement_campaigns:
-        return announcement_campaigns
+    seen = {(campaign.name.casefold(), campaign.reward_text.replace(",", "").casefold()) for campaign in campaigns}
+    for announcement in announcement_campaigns:
+        key = (announcement.name.casefold(), announcement.reward_text.replace(",", "").casefold())
+        if key not in seen:
+            campaigns.append(announcement)
+            seen.add(key)
+    if campaigns:
+        return campaigns
     if region_restricted:
         raise RuntimeError("OKX 产品页受地区限制，官方公告中暂未找到有效期内的闪赚活动。")
     return campaigns
@@ -72,25 +90,55 @@ def _has_region_restriction_notice(html: str) -> bool:
 
 
 def fetch_public_flash_earn_announcements(*, timeout: int = 20) -> list[Campaign]:
-    response = requests.get(ANNOUNCEMENTS_URL, headers=REQUEST_HEADERS, timeout=timeout)
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, "html.parser")
-    article_urls: list[str] = []
-    for link in soup.select('a[href*="/help/"]'):
-        href = str(link.get("href", "")).strip()
-        if not href or "flash-earn" not in href.casefold() or "help/section/" in href:
+    article_urls: dict[str, list[str]] = {}
+    source_errors: list[str] = []
+    readable_sources = 0
+    for section_url in ANNOUNCEMENT_SECTION_URLS:
+        try:
+            response = requests.get(section_url, headers=REQUEST_HEADERS, timeout=timeout)
+            response.raise_for_status()
+        except Exception as exc:
+            source_errors.append(f"{section_url}: {exc}")
             continue
-        article_url = urljoin(response.url, href)
-        if article_url not in article_urls:
-            article_urls.append(article_url)
+        readable_sources += 1
+        soup = BeautifulSoup(response.text, "html.parser")
+        for link in soup.select('a[href*="/help/"]'):
+            href = str(link.get("href", "")).strip()
+            if not href or "flash-earn" not in href.casefold() or "help/section/" in href:
+                continue
+            article_url = urljoin(response.url, href)
+            if urlparse(article_url).hostname != "www.okx.com":
+                continue
+            slug = urlparse(article_url).path.rsplit("/help/", 1)[-1]
+            urls = article_urls.setdefault(slug, [])
+            if article_url not in urls:
+                urls.append(article_url)
+
+    if not readable_sources:
+        raise RuntimeError("所有官方公告入口均读取失败：" + "; ".join(source_errors))
+    if not article_urls:
+        raise RuntimeError("官方公告入口可访问，但均未返回闪赚公告链接，无法确认当前是否有活动")
 
     campaigns: list[Campaign] = []
-    for article_url in article_urls:
-        article_response = requests.get(article_url, headers=REQUEST_HEADERS, timeout=timeout)
-        article_response.raise_for_status()
-        campaign = _campaign_from_public_announcement(article_response.text, article_response.url)
-        if campaign is not None:
-            campaigns.append(campaign)
+    readable_articles = 0
+    for localized_urls in article_urls.values():
+        for article_url in localized_urls:
+            try:
+                article_response = requests.get(article_url, headers=REQUEST_HEADERS, timeout=timeout)
+                article_response.raise_for_status()
+            except Exception as exc:
+                source_errors.append(f"{article_url}: {exc}")
+                continue
+            if _has_region_restriction_notice(article_response.text):
+                source_errors.append(f"{article_url}: 页面限制访问")
+                continue
+            readable_articles += 1
+            campaign = _campaign_from_public_announcement(article_response.text, article_response.url)
+            if campaign is not None:
+                campaigns.append(campaign)
+                break
+    if not readable_articles:
+        raise RuntimeError("闪赚公告链接均读取失败：" + "; ".join(source_errors))
     return campaigns
 
 
@@ -103,27 +151,58 @@ def _campaign_from_public_announcement(html: str, source_url: str) -> Campaign |
         r"(\d{1,2})日\s*(\d{1,2}):(\d{2})\s*[（(]UTC\s*\+\s*8[）)]",
         text,
     )
-    if period_match is None:
-        return None
-    values = [int(value) for value in period_match.groups()]
-    local_timezone = timezone(timedelta(hours=8))
-    start_at = datetime(*values[:5], tzinfo=local_timezone).astimezone().replace(tzinfo=None)
-    end_at = datetime(*values[5:], tzinfo=local_timezone).astimezone().replace(tzinfo=None)
+    if period_match is not None:
+        values = [int(value) for value in period_match.groups()]
+        start_at = datetime(*values[:5], tzinfo=timezone(timedelta(hours=8)))
+        end_at = datetime(*values[5:], tzinfo=timezone(timedelta(hours=8)))
+    else:
+        english_period = re.search(
+            r"Campaign period\s*:\s*([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})\s+"
+            r"(\d{1,2}):(\d{2})\s*[-–—]\s*([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})\s+"
+            r"(\d{1,2}):(\d{2})\s*\(UTC\)",
+            text,
+            re.IGNORECASE,
+        )
+        if english_period is None:
+            return None
+        months = {
+            name: index for index, name in enumerate(
+                ("january", "february", "march", "april", "may", "june", "july", "august",
+                 "september", "october", "november", "december"),
+                start=1,
+            )
+        }
+        values = english_period.groups()
+        start_month = months.get(values[0].casefold())
+        end_month = months.get(values[5].casefold())
+        if start_month is None or end_month is None:
+            return None
+        start_at = datetime(int(values[2]), start_month, int(values[1]), int(values[3]), int(values[4]), tzinfo=timezone.utc)
+        end_at = datetime(int(values[7]), end_month, int(values[6]), int(values[8]), int(values[9]), tzinfo=timezone.utc)
+    start_at = start_at.astimezone().replace(tzinfo=None)
+    end_at = end_at.astimezone().replace(tzinfo=None)
     now = datetime.now().astimezone().replace(tzinfo=None)
     if end_at <= now:
         return None
 
-    name_match = re.search(r"(?:本期上线|推出)\s*([A-Z0-9]{2,})\s*[（(]", text)
+    name_match = re.search(r"(?:项目名称|项目代币|Project token)\s*[：:]\s*([A-Z0-9]{2,})\b", text, re.IGNORECASE)
+    if name_match is None:
+        name_match = re.search(r"(?:本期上线|推出)\s*([A-Z0-9]{2,})\s*[（(]", text)
     if name_match is None:
         title = _text(soup.select_one("h1"))
         name_match = re.search(r"Flash Earn(?: Lite)?\s*\(([A-Z0-9]{2,})\)", title, re.IGNORECASE)
     if name_match is None:
         return None
     name = name_match.group(1).upper()
-    reward_match = re.search(r"空投总奖池\s*[：:]?\s*([\d,]+\s+[A-Z0-9]+)", text)
+    reward_match = re.search(
+        r"(?:空投总奖池|Airdrop total rewards)\s*[：:]?\s*([\d,]+\s+[A-Z0-9]+)",
+        text,
+        re.IGNORECASE,
+    )
     reward_text = reward_match.group(1) if reward_match else ""
     supported_assets = tuple(dict.fromkeys(
         re.findall(r"奖池\s*\d+\s*[：:]\s*([A-Z0-9]+)\s*申购池", text)
+        + re.findall(r"Pool\s*\d+\s*:\s*([A-Z0-9]+)\s+Subscription Pool", text, re.IGNORECASE)
     ))
 
     is_upcoming = now < start_at
