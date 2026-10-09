@@ -7,5 +7,6 @@ dist/
 data/
 
 *.spec
+!OKXFlashEarnReminder_v0.1.6.spec
 
 .worktrees/

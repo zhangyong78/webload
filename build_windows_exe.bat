@@ -2,16 +2,8 @@
 setlocal
 cd /d %~dp0
 
-pyinstaller ^
-  --noconfirm ^
-  --clean ^
-  --windowed ^
-  --name OKXFlashEarnReminder ^
-  run_windows.pyw
+pyinstaller --noconfirm --clean --distpath dist OKXFlashEarnReminder_v0.1.6.spec
 
 if errorlevel 1 exit /b %errorlevel%
-
-del /Q "dist\OKXFlashEarnReminder\_internal\icuuc.dll" 2>nul
-for %%F in ("dist\OKXFlashEarnReminder\_internal\icudt*.dll") do if exist "%%~F" del /Q "%%~F"
 
 endlocal
