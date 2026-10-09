@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from flash_earn_reminder import __version__
 from flash_earn_reminder.emailing import build_alert_email, build_simulated_ongoing_email, import_qqokx_email_config, send_email_alert
 from flash_earn_reminder.instance_guard import SingleInstanceGuard
 from flash_earn_reminder.models import AlertEvent, AppConfig, AppState, Campaign, EmailConfig
@@ -152,7 +153,7 @@ class CampaignCard(QFrame):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("OKX Flash Earn Reminder")
+        self.setWindowTitle(f"OKX Flash Earn Reminder v{__version__}")
         self.resize(1180, 860)
         self._signals = WorkerSignals()
         self._signals.cycle_finished.connect(self._handle_cycle_result)

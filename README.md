@@ -2,6 +2,8 @@
 
 这是一个 Windows 桌面提醒程序，用来监控 OKX 闪赚活动和 A 股可转债申购日历。
 
+当前版本：**v0.1.1**
+
 ## 功能
 
 - Windows 桌面界面，支持最小化到托盘
@@ -25,6 +27,10 @@ python -m flash_earn_reminder.main
 ```
 
 如果需要无黑窗口启动，可以使用 `run_windows.pyw` 或 `run_windows_silent.vbs`。
+
+## 版本记录
+
+- **v0.1.1**：窗口标题显示版本号；修复 Windows 打包时误收不兼容 ICU DLL 导致 QtCore 无法加载的问题。
 
 ## 说明
 

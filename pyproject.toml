@@ -1,6 +1,6 @@
 [project]
 name = "okx-flash-earn-reminder"
-version = "0.1.0"
+version = "0.1.1"
 description = "Windows desktop reminder app for OKX Flash Earn campaigns"
 requires-python = ">=3.11"
 dependencies = [
@@ -11,4 +11,3 @@ dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-
