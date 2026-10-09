@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -11,6 +13,7 @@ from flash_earn_reminder.models import Campaign
 
 
 DEFAULT_URL = "https://www.okx.com/zh-hans/flash-earn/stake-to-earn?from-page=trade"
+ANNOUNCEMENTS_URL = "https://www.okx.com/zh-hans/help/section/announcements-latest-announcements"
 REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -44,14 +47,99 @@ def fetch_page(url: str = DEFAULT_URL, *, timeout: int = 20) -> str:
 def fetch_campaigns(url: str = DEFAULT_URL) -> list[Campaign]:
     html = fetch_page(url)
     campaigns = parse_campaigns(html)
-    if not campaigns and _has_region_restriction_notice(html):
-        raise RuntimeError("OKX 页面提示当前地区无法使用该产品，活动数据不可用。请查看 OKX 官方地区可用性说明。")
+    if campaigns:
+        return campaigns
+    if _has_region_restriction_notice(html):
+        try:
+            announcement_campaigns = fetch_public_flash_earn_announcements()
+        except Exception as exc:
+            raise RuntimeError(
+                f"OKX 产品页受地区限制，且官方活动公告暂时无法读取：{exc}"
+            ) from exc
+        if announcement_campaigns:
+            return announcement_campaigns
+        raise RuntimeError("OKX 产品页受地区限制，官方公告中暂未找到有效期内的闪赚活动。")
     return campaigns
 
 
 def _has_region_restriction_notice(html: str) -> bool:
     page_text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True).casefold()
     return any(marker.casefold() in page_text for marker in _REGION_RESTRICTION_MARKERS)
+
+
+def fetch_public_flash_earn_announcements(*, timeout: int = 20) -> list[Campaign]:
+    response = requests.get(ANNOUNCEMENTS_URL, headers=REQUEST_HEADERS, timeout=timeout)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
+    article_urls: list[str] = []
+    for link in soup.select('a[href*="/help/"]'):
+        href = str(link.get("href", "")).strip()
+        if not href or "flash-earn" not in href.casefold() or "help/section/" in href:
+            continue
+        article_url = urljoin(response.url, href)
+        if article_url not in article_urls:
+            article_urls.append(article_url)
+
+    campaigns: list[Campaign] = []
+    for article_url in article_urls:
+        article_response = requests.get(article_url, headers=REQUEST_HEADERS, timeout=timeout)
+        article_response.raise_for_status()
+        campaign = _campaign_from_public_announcement(article_response.text, article_response.url)
+        if campaign is not None:
+            campaigns.append(campaign)
+    return campaigns
+
+
+def _campaign_from_public_announcement(html: str, source_url: str) -> Campaign | None:
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text(" ", strip=True)
+    period_match = re.search(
+        r"活动时间\s*[：:]?\s*(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日\s*"
+        r"(\d{1,2}):(\d{2})\s*至\s*(\d{4})年\s*(\d{1,2})月\s*"
+        r"(\d{1,2})日\s*(\d{1,2}):(\d{2})\s*[（(]UTC\s*\+\s*8[）)]",
+        text,
+    )
+    if period_match is None:
+        return None
+    values = [int(value) for value in period_match.groups()]
+    local_timezone = timezone(timedelta(hours=8))
+    start_at = datetime(*values[:5], tzinfo=local_timezone).astimezone().replace(tzinfo=None)
+    end_at = datetime(*values[5:], tzinfo=local_timezone).astimezone().replace(tzinfo=None)
+    now = datetime.now().astimezone().replace(tzinfo=None)
+    if end_at <= now:
+        return None
+
+    name_match = re.search(r"(?:本期上线|推出)\s*([A-Z0-9]{2,})\s*[（(]", text)
+    if name_match is None:
+        title = _text(soup.select_one("h1"))
+        name_match = re.search(r"Flash Earn(?: Lite)?\s*\(([A-Z0-9]{2,})\)", title, re.IGNORECASE)
+    if name_match is None:
+        return None
+    name = name_match.group(1).upper()
+    reward_match = re.search(r"空投总奖池\s*[：:]?\s*([\d,]+\s+[A-Z0-9]+)", text)
+    reward_text = reward_match.group(1) if reward_match else ""
+    supported_assets = tuple(dict.fromkeys(
+        re.findall(r"奖池\s*\d+\s*[：:]\s*([A-Z0-9]+)\s*申购池", text)
+    ))
+
+    is_upcoming = now < start_at
+    countdown_target = start_at if is_upcoming else end_at
+    countdown_seconds = max(0, int((countdown_target - now).total_seconds()))
+    countdown_label = "活动即将开始" if is_upcoming else "结束倒计时"
+    return Campaign(
+        campaign_id=hashlib.sha1(f"{name}|{start_at.isoformat()}|{end_at.isoformat()}".encode("utf-8")).hexdigest()[:16],
+        name=name,
+        status_text="即将开始（官方公告）" if is_upcoming else "进行中（官方公告）",
+        reward_text=reward_text,
+        icon_url="",
+        countdown_label=countdown_label,
+        countdown_text=_format_countdown_text(countdown_seconds),
+        countdown_seconds=countdown_seconds,
+        is_ongoing=not is_upcoming,
+        is_upcoming=is_upcoming,
+        source_url=source_url,
+        supported_assets=supported_assets,
+    )
 
 
 def parse_campaigns(html: str, *, source_url: str = DEFAULT_URL) -> list[Campaign]:
