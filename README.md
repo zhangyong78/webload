@@ -30,7 +30,7 @@ python -m flash_earn_reminder.main
 
 ## 版本记录
 
-- **v0.1.6**：改为单文件 Windows 可执行程序，避免复制/解压时遗漏 Qt 运行文件导致启动失败。
+- **v0.1.6**：提供完整目录打包，包含 Qt 运行文件，按文件夹整体分发，降低复制/解压时遗漏依赖的风险。
 - **v0.1.5**：增加 OKX 官方 sitemap 公开数据源，免登录发现 Flash Earn 活动公告并并发检查近期公告；打包版本配置固定保存到 `%LOCALAPPDATA%\\OKXFlashEarnReminder`，自动迁移旧版本邮箱和提醒状态。
 - **v0.1.4**：免登录检查合并产品页与中英文“最新活动”公告，按活动去重并解析英文公告；公告源不可用且产品页无活动时明确报错，避免将抓取失败记为 0 个活动。
 - **v0.1.3**：产品页没有解析到活动时自动回退读取 OKX 官方活动公告，适配受地区影响的空页面响应。
@@ -41,4 +41,4 @@ python -m flash_earn_reminder.main
 
 - 源码运行配置保存在 `data/` 下；Windows 打包版配置保存在 `%LOCALAPPDATA%\\OKXFlashEarnReminder`，升级时会尝试从旧版本目录导入，避免邮箱设置随程序目录变化丢失。配置不会提交到仓库。
 - OKX V5 公告 API 未提供专用闪赚活动列表；程序使用 OKX 官方公开 sitemap 发现公告，再读取官方公告页面解析活动，不登录或自动申购。
-- 打包产物由 `build_windows_exe.bat` 生成，输出单文件可执行程序到 `dist/`；单文件仍将配置保存在 `%LOCALAPPDATA%\\OKXFlashEarnReminder`。
+- 打包产物由 `build_windows_exe.bat` 生成到 `dist/`。分发时请完整保留 `OKXFlashEarnReminder_v0.1.6/` 文件夹（含 `_internal/`），不要只复制主程序 EXE；配置保存在 `%LOCALAPPDATA%\\OKXFlashEarnReminder`。
