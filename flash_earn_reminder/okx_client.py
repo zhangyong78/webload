@@ -26,6 +26,13 @@ _COUNTDOWN_EN_RE = re.compile(
     r"(?:(?P<minutes>\d+)\s*m(?:in(?:utes?)?)?)?\s*(?:(?P<seconds>\d+)\s*s(?:ec(?:onds?)?)?)?\s*$",
     re.IGNORECASE,
 )
+_REGION_RESTRICTION_MARKERS = (
+    "不支持您所在的地区",
+    "无法在中国香港特别行政区提供服务",
+    "this product is unavailable in your current country/region",
+    "not available in your region",
+    "unavailable in your region",
+)
 
 
 def fetch_page(url: str = DEFAULT_URL, *, timeout: int = 20) -> str:
@@ -35,7 +42,16 @@ def fetch_page(url: str = DEFAULT_URL, *, timeout: int = 20) -> str:
 
 
 def fetch_campaigns(url: str = DEFAULT_URL) -> list[Campaign]:
-    return parse_campaigns(fetch_page(url))
+    html = fetch_page(url)
+    campaigns = parse_campaigns(html)
+    if not campaigns and _has_region_restriction_notice(html):
+        raise RuntimeError("OKX 页面提示当前地区无法使用该产品，活动数据不可用。请查看 OKX 官方地区可用性说明。")
+    return campaigns
+
+
+def _has_region_restriction_notice(html: str) -> bool:
+    page_text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True).casefold()
+    return any(marker.casefold() in page_text for marker in _REGION_RESTRICTION_MARKERS)
 
 
 def parse_campaigns(html: str, *, source_url: str = DEFAULT_URL) -> list[Campaign]:

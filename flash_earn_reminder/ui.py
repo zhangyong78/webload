@@ -441,7 +441,8 @@ class MainWindow(QMainWindow):
             self._append_log(f"本次未触发提醒，规则判定时间 {_format_dt(result.checked_at)}。")
         self.last_check_label.setText(_format_dt(result.checked_at))
         self.next_check_label.setText(_format_dt(self._next_run_time()))
-        self._render_campaigns(result.campaigns)
+        empty_message = f"活动数据获取失败：{result.error}" if result.error else "当前无可提醒活动。"
+        self._render_campaigns(result.campaigns, empty_message=empty_message)
         save_app_state(app_state_path(), self.state)
         for alert in result.alerts:
             self._dispatch_alert(alert)
@@ -485,15 +486,16 @@ class MainWindow(QMainWindow):
             return
         self._signals.email_finished.emit(f"邮件已发送: {subject}")
 
-    def _render_campaigns(self, campaigns: list[Campaign]) -> None:
+    def _render_campaigns(self, campaigns: list[Campaign], *, empty_message: str = "当前无可提醒活动。") -> None:
         while self.campaign_layout.count():
             item = self.campaign_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
         if not campaigns:
-            empty = QLabel("当前无可提醒活动。")
+            empty = QLabel(empty_message)
             empty.setObjectName("emptyState")
+            empty.setWordWrap(True)
             self.campaign_layout.addWidget(empty)
             self.campaign_layout.addStretch(1)
             return
